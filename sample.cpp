@@ -160,11 +160,13 @@ const GLfloat Colors[ ][3] =
 
 // fog parameters:
 
-const GLfloat FOGCOLOR[4] = { .0f, .0f, .0f, 1.f };
+// fog parameters (tuned for a farther camera)
+const GLfloat FOGCOLOR[4] = { 0.0f, 0.0f, 0.0f, 1.f }; // keep black if you like space black
 const GLenum  FOGMODE     = GL_LINEAR;
 const GLfloat FOGDENSITY  = 0.30f;
-const GLfloat FOGSTART    = 1.5f;
-const GLfloat FOGEND      = 4.f;
+// old: 1.5f, 4.f  -> too near; everything at distance >4 becomes pure fog (black)
+const GLfloat FOGSTART    = 15.0f;   // start fogging much farther away
+const GLfloat FOGEND      = 40.0f;   // fully fogged beyond this
 
 // for lighting:
 
@@ -218,6 +220,19 @@ inline float RandAngle()
 {
     return ( (float)rand() / (float)RAND_MAX ) * F_2_PI;
 }
+
+// --- planet colors ---
+float PlanetColor[8][3] = {
+    {0.80f, 0.62f, 0.40f}, // Mercury  (warm gray-brown)
+    {1.00f, 0.80f, 0.10f}, // Venus    (golden yellow)
+    {0.10f, 0.45f, 1.00f}, // Earth    (bright blue)
+    {1.00f, 0.30f, 0.10f}, // Mars     (deep orange-red)
+    {0.95f, 0.75f, 0.35f}, // Jupiter  (tan/orange)
+    {1.00f, 0.90f, 0.55f}, // Saturn   (pale yellow)
+    {0.15f, 0.85f, 0.85f}, // Uranus   (teal-cyan)
+    {0.15f, 0.25f, 1.00f}  // Neptune  (saturated blue)
+};
+const float SunColor[3] = {1.00f, 0.80f, 0.20f}; // warm yellow
 
 // --- vertex counter (for self-check) ---
 int gVertCount = 0;
@@ -433,7 +448,8 @@ Display( )
 
 	// specify shading to be flat:
 
-	glShadeModel( GL_FLAT );
+	// glShadeModel( GL_FLAT );
+	glShadeModel( GL_SMOOTH );
 
 	// set the viewport to be a square centered in the window:
 
@@ -508,43 +524,24 @@ Display( )
 
 	// draw the box object by calling up its display list:
 
-	// --- translucent + outlined version ---
-	glPushMatrix();
-		glScalef(1.0f, 1.0f, 1.0f);
+	glEnable(GL_BLEND);
+	glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+	glDepthMask(GL_FALSE);
 
-		glEnable(GL_BLEND);
-		glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+	// Sun (color + alpha already set in its list)
+	glCallList(SunList);
 
-		// 简化透明排序：先禁写深度，避免半透明相互遮挡的硬边
-		glDepthMask(GL_FALSE);
+	// Planets (color + alpha already set in their lists)
+	for (int i = 0; i < 8; ++i) {
+		glPushMatrix();
+			glTranslatef(PlanetPos[i][0], PlanetPos[i][1], PlanetPos[i][2]);
+			glCallList(PlanetList[i]);
+		glPopMatrix();
+	}
 
-		// 太阳（半透明）
-		glColor4f(1.0f, 0.8f, 0.2f, 0.65f);
-		glCallList(SunList);
-		// 太阳描边
-		glColor4f(0.f, 0.f, 0.f, 1.0f);
-		glCallList(SunEdge);
+	glDepthMask(GL_TRUE);
+	glDisable(GL_BLEND);
 
-		// 行星（半透明 + 描边）
-		for (int i = 0; i < 8; ++i) {
-			glPushMatrix();
-				glTranslatef(PlanetPos[i][0], PlanetPos[i][1], PlanetPos[i][2]);
-
-				// 半透明面
-				// 给每颗行星一个基色；这里偷个懒：先白色×alpha（如果你想保留各自 RGB，可在生成列表时去掉颜色参数，
-				// 然后在这里针对 i 选择对应 rgb，再用 glColor4f(rgb[0],rgb[1],rgb[2],alpha)）
-				glColor4f(1.f, 1.f, 1.f, 0.55f);
-				glCallList(PlanetList[i]);
-
-				// 黑色细描边
-				glColor4f(0.f, 0.f, 0.f, 1.0f);
-				glCallList(PlanetEdgeList[i]);
-			glPopMatrix();
-		}
-
-		glDepthMask(GL_TRUE);
-		glDisable(GL_BLEND);
-	glPopMatrix();
 
 
 
@@ -722,7 +719,7 @@ DoStrokeString( float x, float y, float z, float ht, char *s )
 {
 	glPushMatrix( );
 		glTranslatef( (GLfloat)x, (GLfloat)y, (GLfloat)z );
-		float sf = ht / ( 119.05f + 33.33f );
+		float sf = ht / ( 119.05f + 66.66f );
 		glScalef( (GLfloat)sf, (GLfloat)sf, (GLfloat)sf );
 		char c;			// one character to print
 		for( ; ( c = *s ) != '\0'; s++ )
@@ -847,33 +844,66 @@ InitGraphics( )
 GLuint MakeUvSphereList(float radius, int slices, int stacks, const float rgb[3]);
 GLuint MakeUvSphereEdgeList(float radius, int slices, int stacks, const float rgb[3], float scale=1.0f);
 
-GLuint MakeUvSphereList(float R, int SLICES, int STACKS, const float rgb[3]) {
+// Builds a UV-sphere with per-vertex color gradient and fixed alpha.
+// The gradient is a smooth blend between a darker "belt" color (near equator)
+// and a lighter "cap" color (near poles). Alpha controls transparency.
+static inline float clamp01(float x) { return x < 0.f ? 0.f : (x > 1.f ? 1.f : x); }
+static inline float mixf(float a, float b, float t) { return a + (b - a) * t; }
+
+GLuint MakeUvSphereList(float R, int SLICES, int STACKS, const float base[3], float alpha,
+                        float lighten = 1.20f, float darken = 0.75f)
+{
+    // derive two endpoints for the gradient from the base color:
+    float cap[3]  = { clamp01(base[0]*lighten), clamp01(base[1]*lighten), clamp01(base[2]*lighten) };   // lighter near poles
+    float belt[3] = { clamp01(base[0]*darken ), clamp01(base[1]*darken ), clamp01(base[2]*darken ) };   // darker near equator
+
     GLuint lid = glGenLists(1);
     glNewList(lid, GL_COMPILE);
     {
-        for (int i = 0; i < STACKS; ++i) {
-            float v0 = (float)i / STACKS;
-            float v1 = (float)(i + 1) / STACKS;
-            float th0 = F_PI * v0;
+        for (int i = 0; i < STACKS; ++i)
+        {
+            float v0  = (float)i / STACKS;
+            float v1  = (float)(i + 1) / STACKS;
+            float th0 = F_PI * v0;    // 0..PI
             float th1 = F_PI * v1;
-            float y0 = cosf(th0), r0 = sinf(th0);
-            float y1 = cosf(th1), r1 = sinf(th1);
+            float y0n = cosf(th0), r0 = sinf(th0);  // y normalized in [-1,1]
+            float y1n = cosf(th1), r1 = sinf(th1);
 
-            // glColor3fv(rgb);               // pure color
             glBegin(GL_TRIANGLES);
-            for (int j = 0; j < SLICES; ++j) {
-                float u0 = (float)j / SLICES;
-                float u1 = (float)(j + 1) / SLICES;
+            for (int j = 0; j < SLICES; ++j)
+            {
+                float u0  = (float)j / SLICES;
+                float u1  = (float)(j + 1) / SLICES;
                 float ph0 = F_2_PI * u0;
                 float ph1 = F_2_PI * u1;
 
-                float x00 = R * r0 * cosf(ph0), z00 = R * r0 * sinf(ph0), y00 = R * y0;
-                float x10 = R * r0 * cosf(ph1), z10 = R * r0 * sinf(ph1), y10 = R * y0;
-                float x11 = R * r1 * cosf(ph1), z11 = R * r1 * sinf(ph1), y11 = R * y1;
-                float x01 = R * r1 * cosf(ph0), z01 = R * r1 * sinf(ph0), y01 = R * y1;
+                // four vertices on the two latitudes
+                float x00 = R * r0 * cosf(ph0), z00 = R * r0 * sinf(ph0), y00 = R * y0n;
+                float x10 = R * r0 * cosf(ph1), z10 = R * r0 * sinf(ph1), y10 = R * y0n;
+                float x11 = R * r1 * cosf(ph1), z11 = R * r1 * sinf(ph1), y11 = R * y1n;
+                float x01 = R * r1 * cosf(ph0), z01 = R * r1 * sinf(ph0), y01 = R * y1n;
 
-                V3(x00, y00, z00); V3(x10, y10, z10); V3(x11, y11, z11);
-                V3(x00, y00, z00); V3(x11, y11, z11); V3(x01, y01, z01);
+                // gradient factor per vertex: map y in [-R,+R] -> t in [0,1]
+                float t00 = 0.5f * (y00 / R + 1.f);
+                float t10 = 0.5f * (y10 / R + 1.f);
+                float t11 = 0.5f * (y11 / R + 1.f);
+                float t01 = 0.5f * (y01 / R + 1.f);
+
+                // triangle 1
+                glColor4f(mixf(belt[0], cap[0], t00), mixf(belt[1], cap[1], t00), mixf(belt[2], cap[2], t00), alpha);
+                V3(x00, y00, z00);
+                glColor4f(mixf(belt[0], cap[0], t10), mixf(belt[1], cap[1], t10), mixf(belt[2], cap[2], t10), alpha);
+                V3(x10, y10, z10);
+                glColor4f(mixf(belt[0], cap[0], t11), mixf(belt[1], cap[1], t11), mixf(belt[2], cap[2], t11), alpha);
+                V3(x11, y11, z11);
+
+                // triangle 2
+                glColor4f(mixf(belt[0], cap[0], t00), mixf(belt[1], cap[1], t00), mixf(belt[2], cap[2], t00), alpha);
+                V3(x00, y00, z00);
+                glColor4f(mixf(belt[0], cap[0], t11), mixf(belt[1], cap[1], t11), mixf(belt[2], cap[2], t11), alpha);
+                V3(x11, y11, z11);
+                glColor4f(mixf(belt[0], cap[0], t01), mixf(belt[1], cap[1], t01), mixf(belt[2], cap[2], t01), alpha);
+                V3(x01, y01, z01);
             }
             glEnd();
         }
@@ -881,6 +911,7 @@ GLuint MakeUvSphereList(float R, int SLICES, int STACKS, const float rgb[3]) {
     glEndList();
     return lid;
 }
+
 
 //  draw only the edges of the sphere: each triangle is drawn with GL_LINE_LOOP to draw the edges;
 //  scale>1 can slightly enlarge the sphere to avoid Z-Fighting
@@ -1021,48 +1052,64 @@ InitLists( )
 		glLineWidth( 1. );
 	glEndList( );
 	
-	// ---------- Sun ----------
-	const float SUN_RGB[3] = {1.f, 0.8f, 0.2f};
-	SunList = MakeUvSphereList(1.0f, 48, 32, SUN_RGB);
-	GLuint SunEdge = MakeUvSphereEdgeList(1.0f, 48, 32, (const float[3]){0.f,0.f,0.f}, 1.01f); // Sun edge
+	// ---------- Sun (gradient + alpha baked into the list) ----------
+	const float SunBase[3] = { 1.0f, 0.8f, 0.2f };     // warm yellow
+	SunList = MakeUvSphereList(
+		1.0f,               // radius
+		48, 32,             // slices, stacks
+		SunBase,            // base color
+		0.65f,              // alpha (semi-transparent)
+		1.25f,              // lighten factor near poles
+		0.85f               // darken factor near equator
+	);
+	// Outline temporarily disabled:
+	// SunEdge = MakeUvSphereEdgeList(1.0f, 48, 32, (const float[3]){0,0,0}, 1.01f);
 
-	// ---------- Planets ----------
-	const float Rm = 0.18f; // Mercury
-	const float Rv = 0.28f; // Venus
-	const float Re = 0.30f; // Earth
-	const float Rm2= 0.24f; // Mars
-	const float Rj = 0.60f; // Jupiter
-	const float Rs = 0.50f; // Saturn
-	const float Ru = 0.40f; // Uranus
-	const float Rn = 0.38f; // Neptune
+	// ---------- Planets (distinct bases + gradient + alpha) ----------
+	const float Rm  = 0.18f, Rv = 0.28f, Re = 0.30f, Rm2 = 0.24f;
+	const float Rj  = 0.60f, Rs = 0.50f, Ru = 0.40f, Rn  = 0.38f;
+	const float radii[8] = { Rm, Rv, Re, Rm2, Rj, Rs, Ru, Rn };
 
-	const float C_MER[3] = {0.7f, 0.6f, 0.5f};
-	const float C_VEN[3] = {1.0f, 0.9f, 0.6f};
-	const float C_EAR[3] = {0.2f, 0.4f, 0.9f};
-	const float C_MAR[3] = {0.9f, 0.3f, 0.1f};
-	const float C_JUP[3] = {0.9f, 0.75f, 0.5f};
-	const float C_SAT[3] = {0.95f,0.85f,0.6f};
-	const float C_URA[3] = {0.5f, 0.85f,0.9f};
-	const float C_NEP[3] = {0.2f, 0.35f,0.9f};
+	// strongly separated base colors to make differences obvious
+	const float PlanetBase[8][3] = {
+		{0.80f, 0.62f, 0.40f}, // Mercury  (warm gray-brown)
+		{1.00f, 0.80f, 0.10f}, // Venus    (golden yellow)
+		{0.10f, 0.45f, 1.00f}, // Earth    (bright blue)
+		{1.00f, 0.30f, 0.10f}, // Mars     (deep orange-red)
+		{0.95f, 0.75f, 0.35f}, // Jupiter  (tan/orange)
+		{1.00f, 0.90f, 0.55f}, // Saturn   (pale yellow)
+		{0.15f, 0.85f, 0.85f}, // Uranus   (teal-cyan)
+		{0.15f, 0.25f, 1.00f}  // Neptune  (saturated blue)
+	};
 
-	const float radii[8] = {Rm,Rv,Re,Rm2,Rj,Rs,Ru,Rn};
-	const float (*colors[8])[3] = {&C_MER,&C_VEN,&C_EAR,&C_MAR,&C_JUP,&C_SAT,&C_URA,&C_NEP};
+	// build display lists with per-vertex gradient + alpha
+	for (int i = 0; i < 8; ++i) {
+		PlanetList[i] = MakeUvSphereList(
+			radii[i],    // radius
+			32, 20,      // slices, stacks
+			PlanetBase[i],
+			0.55f,       // alpha (semi-transparent)
+			1.20f,       // lighten factor
+			0.80f        // darken factor
+		);
 
-	// 轨道半径（决定“圆多大”）；在你原来的 Xs 基础上微调
+		// Outline temporarily disabled:
+		// PlanetEdgeList[i] = MakeUvSphereEdgeList(radii[i], 32, 20, (const float[3]){0,0,0}, 1.01f);
+	}
+
+	// ---------- Random placement along circular orbits (x-z plane) ----------
 	const float ORBIT_R[8] = { 1.8f, 2.6f, 3.4f, 4.2f, 5.8f, 7.4f, 8.8f, 10.0f };
 
-	// 为了每次运行都有不同布局（如果你想固定，可去掉这一行）
+	// Seed once per run so positions change each execution (remove if you want fixed layout)
 	TimeOfDaySeed();
 
 	for (int i = 0; i < 8; ++i) {
-		PlanetList[i] = MakeUvSphereList(radii[i], 32, 20, *colors[i]);
-		PlanetEdgeList[i] = MakeUvSphereEdgeList(radii[i], 32, 20, (const float[3]){0.f,0.f,0.f}, 1.01f);
-
-		float ang = RandAngle();
-		PlanetPos[i][0] = ORBIT_R[i] * cosf(ang);  // x
-		PlanetPos[i][1] = 0.0f;                    // y
-		PlanetPos[i][2] = ORBIT_R[i] * sinf(ang);  // z
+		float ang = RandAngle();                  // angle in [0, 2π)
+		PlanetPos[i][0] = ORBIT_R[i] * cosf(ang); // x
+		PlanetPos[i][1] = 0.0f;                   // y
+		PlanetPos[i][2] = ORBIT_R[i] * sinf(ang); // z
 	}
+
 
 }
 
@@ -1270,17 +1317,17 @@ MouseMotion( int x, int y )
 void
 Reset( )
 {
-	ActiveButton = 0;
-	AxesOn = 1;
-	DebugOn = 0;
-	DepthBufferOn = 1;
-	DepthFightingOn = 0;
-	DepthCueOn = 0;
-	Scale  = 1.0;
-	ShadowsOn = 0;
-	NowColor = YELLOW;
-	NowProjection = PERSP;
-	Xrot = Yrot = 0.;
+    ActiveButton = 0;
+    AxesOn = 1;
+    DebugOn = 0;
+    DepthBufferOn = 1;
+    DepthFightingOn = 0;
+    DepthCueOn = 0;
+    Scale  = 2.5f;   // was 1.0f — increase to enlarge the whole scene
+    ShadowsOn = 0;
+    NowColor = YELLOW;
+    NowProjection = PERSP;
+    Xrot = Yrot = 0.;
 }
 
 
