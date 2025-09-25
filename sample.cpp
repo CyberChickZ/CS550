@@ -4,6 +4,7 @@
 #include <math.h>
 #include <ctype.h>
 #include <time.h>
+#include <vector>
 
 
 #ifndef F_PI
@@ -51,7 +52,7 @@
 
 // title of these windows:
 
-const char *WINDOWTITLE = "OpenGL / GLUT Sample -- Joe Graphics";
+const char *WINDOWTITLE = "CS550 P1 -- <Haochuan Zhang>";
 const char *GLUITITLE   = "User Interface Window";
 
 // what the glui package defines as true and false:
@@ -200,6 +201,16 @@ float	Time;					// used for animation, this has a value between 0. and 1.
 int		Xmouse, Ymouse;			// mouse values
 float	Xrot, Yrot;				// rotation angles in degrees
 
+// >>> BEGIN MY ADD
+GLuint MyObjList = 0;
+
+// --- vertex counter (for self-check) ---
+int gVertCount = 0;
+inline void V3(float x, float y, float z) {
+    glVertex3f(x, y, z);
+    gVertCount++;
+}
+// <<< END MY ADD
 
 // function prototypes:
 
@@ -481,7 +492,17 @@ Display( )
 
 	// draw the box object by calling up its display list:
 
-	glCallList( BoxList );
+	// glCallList( BoxList );
+
+	// glPushMatrix();
+	// glTranslatef(-1.2f, 0.f, 0.f);
+	// glCallList( BoxList );
+	// glPopMatrix();
+
+	// glPushMatrix();
+	// glTranslatef(+1.2f, 0.f, 0.f);
+	glCallList( MyObjList );
+	// glPopMatrix();
 
 #ifdef DEMO_Z_FIGHTING
 	if( DepthFightingOn != 0 )
@@ -864,6 +885,84 @@ InitLists( )
 			Axes( 1.5 );
 		glLineWidth( 1. );
 	glEndList( );
+
+	// ---------- My object: SUN v1 (UV sphere with warm gradient) ----------
+	MyObjList = glGenLists(1);
+	glNewList(MyObjList, GL_COMPILE);
+	{
+		// 球体参数
+		const float R = 1.0f;     // 半径
+		const int   SLICES = 48;  // 经度细分（横向）
+		const int   STACKS = 32;  // 纬度细分（纵向）  -> 顶点数远超 100
+
+		gVertCount = 0;
+
+		// 颜色：用 HSV 在黄(≈50°)到橙(≈20°)之间插值，越靠极点越红
+		auto hsv2rgb = [](float h, float s, float v, float out[3]) {
+			float hsv[3] = { h, s, v };
+			HsvRgb(hsv, out);
+		};
+
+		for (int i = 0; i < STACKS; ++i) {
+			float v0 = (float)i / STACKS;        // [0,1]
+			float v1 = (float)(i + 1) / STACKS;
+
+			// 纬度角：0 在北极，π 在南极
+			float th0 = F_PI * v0;
+			float th1 = F_PI * v1;
+
+			// y = cos(theta), r_xy = sin(theta)
+			float y0 = cosf(th0), r0 = sinf(th0);
+			float y1 = cosf(th1), r1 = sinf(th1);
+
+			glBegin(GL_TRIANGLES);
+			for (int j = 0; j < SLICES; ++j) {
+				float u0 = (float)j / SLICES;          // [0,1]
+				float u1 = (float)(j + 1) / SLICES;
+
+				float ph0 = F_2_PI * u0;               // 经度角
+				float ph1 = F_2_PI * u1;
+
+				// 环上四点（经度×纬度）
+				float x00 = R * r0 * cosf(ph0);
+				float z00 = R * r0 * sinf(ph0);
+				float y00 = R * y0;
+
+				float x10 = R * r0 * cosf(ph1);
+				float z10 = R * r0 * sinf(ph1);
+				float y10 = R * y0;
+
+				float x11 = R * r1 * cosf(ph1);
+				float z11 = R * r1 * sinf(ph1);
+				float y11 = R * y1;
+
+				float x01 = R * r1 * cosf(ph0);
+				float z01 = R * r1 * sinf(ph0);
+				float y01 = R * y1;
+
+				// 顶点颜色：按纬度在 [20°, 50°] 的 hue 范围内渐变，饱和/明度固定
+				float rgb[3];
+				float hue0 = 50.f - 30.f * v0;  // 北极黄 -> 南极橙红
+				float hue1 = 50.f - 30.f * v1;
+
+				// 三角形1：(00,10,11)
+				hsv2rgb(hue0, 1.f, 1.f, rgb); glColor3fv(rgb); V3(x00, y00, z00);
+				hsv2rgb(hue0, 1.f, 1.f, rgb); glColor3fv(rgb); V3(x10, y10, z10);
+				hsv2rgb(hue1, 1.f, 1.f, rgb); glColor3fv(rgb); V3(x11, y11, z11);
+
+				// 三角形2：(00,11,01)
+				hsv2rgb(hue0, 1.f, 1.f, rgb); glColor3fv(rgb); V3(x00, y00, z00);
+				hsv2rgb(hue1, 1.f, 1.f, rgb); glColor3fv(rgb); V3(x11, y11, z11);
+				hsv2rgb(hue1, 1.f, 1.f, rgb); glColor3fv(rgb); V3(x01, y01, z01);
+			}
+			glEnd();
+		}
+	}
+	glEndList();
+
+	printf("[MyObjList:SUN] Vertices Emitted = %d\n", gVertCount);
+
+
 }
 
 
