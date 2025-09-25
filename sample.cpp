@@ -203,6 +203,21 @@ float	Xrot, Yrot;				// rotation angles in degrees
 
 // >>> BEGIN MY ADD
 GLuint MyObjList = 0;
+// --- solar system lists ---
+GLuint SunList = 0;
+GLuint PlanetList[8] = {0};  // Mercury..Neptune
+GLuint SunEdge = 0;                 
+// --- outlines (wireframe) lists for planets ---
+GLuint PlanetEdgeList[8] = {0};
+
+// --- cached random positions on circular orbits (x,y,z) ---
+float PlanetPos[8][3];  // y=0, we only use x,z for the planet's position
+
+// small utility: generate a random angle between [0, 2π)
+inline float RandAngle()
+{
+    return ( (float)rand() / (float)RAND_MAX ) * F_2_PI;
+}
 
 // --- vertex counter (for self-check) ---
 int gVertCount = 0;
@@ -448,7 +463,8 @@ Display( )
 
 	// set the eye position, look-at position, and up-vector:
 
-	gluLookAt( 0.f, 0.f, 3.f,     0.f, 0.f, 0.f,     0.f, 1.f, 0.f );
+	// gluLookAt( 0.f, 0.f, 3.f,     0.f, 0.f, 0.f,     0.f, 1.f, 0.f );
+	gluLookAt( 0.f, 2.f, 20.f,    0.f, 0.f, 0.f,     0.f, 1.f, 0.f );		// make view further back
 
 	// rotate the scene:
 
@@ -492,17 +508,46 @@ Display( )
 
 	// draw the box object by calling up its display list:
 
-	// glCallList( BoxList );
+	// --- translucent + outlined version ---
+	glPushMatrix();
+		glScalef(1.0f, 1.0f, 1.0f);
 
-	// glPushMatrix();
-	// glTranslatef(-1.2f, 0.f, 0.f);
-	// glCallList( BoxList );
-	// glPopMatrix();
+		glEnable(GL_BLEND);
+		glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 
-	// glPushMatrix();
-	// glTranslatef(+1.2f, 0.f, 0.f);
-	glCallList( MyObjList );
-	// glPopMatrix();
+		// 简化透明排序：先禁写深度，避免半透明相互遮挡的硬边
+		glDepthMask(GL_FALSE);
+
+		// 太阳（半透明）
+		glColor4f(1.0f, 0.8f, 0.2f, 0.65f);
+		glCallList(SunList);
+		// 太阳描边
+		glColor4f(0.f, 0.f, 0.f, 1.0f);
+		glCallList(SunEdge);
+
+		// 行星（半透明 + 描边）
+		for (int i = 0; i < 8; ++i) {
+			glPushMatrix();
+				glTranslatef(PlanetPos[i][0], PlanetPos[i][1], PlanetPos[i][2]);
+
+				// 半透明面
+				// 给每颗行星一个基色；这里偷个懒：先白色×alpha（如果你想保留各自 RGB，可在生成列表时去掉颜色参数，
+				// 然后在这里针对 i 选择对应 rgb，再用 glColor4f(rgb[0],rgb[1],rgb[2],alpha)）
+				glColor4f(1.f, 1.f, 1.f, 0.55f);
+				glCallList(PlanetList[i]);
+
+				// 黑色细描边
+				glColor4f(0.f, 0.f, 0.f, 1.0f);
+				glCallList(PlanetEdgeList[i]);
+			glPopMatrix();
+		}
+
+		glDepthMask(GL_TRUE);
+		glDisable(GL_BLEND);
+	glPopMatrix();
+
+
+
 
 #ifdef DEMO_Z_FIGHTING
 	if( DepthFightingOn != 0 )
@@ -798,6 +843,96 @@ InitGraphics( )
 
 }
 
+// Global Helper Functions
+GLuint MakeUvSphereList(float radius, int slices, int stacks, const float rgb[3]);
+GLuint MakeUvSphereEdgeList(float radius, int slices, int stacks, const float rgb[3], float scale=1.0f);
+
+GLuint MakeUvSphereList(float R, int SLICES, int STACKS, const float rgb[3]) {
+    GLuint lid = glGenLists(1);
+    glNewList(lid, GL_COMPILE);
+    {
+        for (int i = 0; i < STACKS; ++i) {
+            float v0 = (float)i / STACKS;
+            float v1 = (float)(i + 1) / STACKS;
+            float th0 = F_PI * v0;
+            float th1 = F_PI * v1;
+            float y0 = cosf(th0), r0 = sinf(th0);
+            float y1 = cosf(th1), r1 = sinf(th1);
+
+            // glColor3fv(rgb);               // pure color
+            glBegin(GL_TRIANGLES);
+            for (int j = 0; j < SLICES; ++j) {
+                float u0 = (float)j / SLICES;
+                float u1 = (float)(j + 1) / SLICES;
+                float ph0 = F_2_PI * u0;
+                float ph1 = F_2_PI * u1;
+
+                float x00 = R * r0 * cosf(ph0), z00 = R * r0 * sinf(ph0), y00 = R * y0;
+                float x10 = R * r0 * cosf(ph1), z10 = R * r0 * sinf(ph1), y10 = R * y0;
+                float x11 = R * r1 * cosf(ph1), z11 = R * r1 * sinf(ph1), y11 = R * y1;
+                float x01 = R * r1 * cosf(ph0), z01 = R * r1 * sinf(ph0), y01 = R * y1;
+
+                V3(x00, y00, z00); V3(x10, y10, z10); V3(x11, y11, z11);
+                V3(x00, y00, z00); V3(x11, y11, z11); V3(x01, y01, z01);
+            }
+            glEnd();
+        }
+    }
+    glEndList();
+    return lid;
+}
+
+//  draw only the edges of the sphere: each triangle is drawn with GL_LINE_LOOP to draw the edges;
+//  scale>1 can slightly enlarge the sphere to avoid Z-Fighting
+GLuint MakeUvSphereEdgeList(float R, int SLICES, int STACKS, const float rgb[3], float scale)
+{
+    GLuint lid = glGenLists(1);
+    glNewList(lid, GL_COMPILE);
+    {
+        glColor3fv(rgb);
+        glLineWidth(1.0f);
+        for (int i = 0; i < STACKS; ++i) {
+            float v0 = (float)i / STACKS;
+            float v1 = (float)(i + 1) / STACKS;
+            float th0 = F_PI * v0;
+            float th1 = F_PI * v1;
+            float y0 = cosf(th0), r0 = sinf(th0);
+            float y1 = cosf(th1), r1 = sinf(th1);
+
+            for (int j = 0; j < SLICES; ++j) {
+                float u0 = (float)j / SLICES;
+                float u1 = (float)(j + 1) / SLICES;
+                float ph0 = F_2_PI * u0;
+                float ph1 = F_2_PI * u1;
+
+                // four vertices
+                float x00 = R * r0 * cosf(ph0), z00 = R * r0 * sinf(ph0), y00 = R * y0;
+                float x10 = R * r0 * cosf(ph1), z10 = R * r0 * sinf(ph1), y10 = R * y0;
+                float x11 = R * r1 * cosf(ph1), z11 = R * r1 * sinf(ph1), y11 = R * y1;
+                float x01 = R * r1 * cosf(ph0), z01 = R * r1 * sinf(ph0), y01 = R * y1;
+
+                // slightly enlarge the sphere to avoid Z-Fighting
+                x00*=scale; y00*=scale; z00*=scale;
+                x10*=scale; y10*=scale; z10*=scale;
+                x11*=scale; y11*=scale; z11*=scale;
+                x01*=scale; y01*=scale; z01*=scale;
+
+                glBegin(GL_LINE_LOOP);  //  draw the edges of triangle 1
+                    glVertex3f(x00,y00,z00);
+                    glVertex3f(x10,y10,z10);
+                    glVertex3f(x11,y11,z11);
+                glEnd();
+                glBegin(GL_LINE_LOOP);  //  draw the edges of triangle 2
+                    glVertex3f(x00,y00,z00);
+                    glVertex3f(x11,y11,z11);
+                    glVertex3f(x01,y01,z01);
+                glEnd();
+            }
+        }
+    }
+    glEndList();
+    return lid;
+}
 
 // initialize the display lists that will not change:
 // (a display list is a way to store opengl commands in
@@ -885,83 +1020,49 @@ InitLists( )
 			Axes( 1.5 );
 		glLineWidth( 1. );
 	glEndList( );
+	
+	// ---------- Sun ----------
+	const float SUN_RGB[3] = {1.f, 0.8f, 0.2f};
+	SunList = MakeUvSphereList(1.0f, 48, 32, SUN_RGB);
+	GLuint SunEdge = MakeUvSphereEdgeList(1.0f, 48, 32, (const float[3]){0.f,0.f,0.f}, 1.01f); // Sun edge
 
-	// ---------- My object: SUN v1 (UV sphere with warm gradient) ----------
-	MyObjList = glGenLists(1);
-	glNewList(MyObjList, GL_COMPILE);
-	{
-		// 球体参数
-		const float R = 1.0f;     // 半径
-		const int   SLICES = 48;  // 经度细分（横向）
-		const int   STACKS = 32;  // 纬度细分（纵向）  -> 顶点数远超 100
+	// ---------- Planets ----------
+	const float Rm = 0.18f; // Mercury
+	const float Rv = 0.28f; // Venus
+	const float Re = 0.30f; // Earth
+	const float Rm2= 0.24f; // Mars
+	const float Rj = 0.60f; // Jupiter
+	const float Rs = 0.50f; // Saturn
+	const float Ru = 0.40f; // Uranus
+	const float Rn = 0.38f; // Neptune
 
-		gVertCount = 0;
+	const float C_MER[3] = {0.7f, 0.6f, 0.5f};
+	const float C_VEN[3] = {1.0f, 0.9f, 0.6f};
+	const float C_EAR[3] = {0.2f, 0.4f, 0.9f};
+	const float C_MAR[3] = {0.9f, 0.3f, 0.1f};
+	const float C_JUP[3] = {0.9f, 0.75f, 0.5f};
+	const float C_SAT[3] = {0.95f,0.85f,0.6f};
+	const float C_URA[3] = {0.5f, 0.85f,0.9f};
+	const float C_NEP[3] = {0.2f, 0.35f,0.9f};
 
-		// 颜色：用 HSV 在黄(≈50°)到橙(≈20°)之间插值，越靠极点越红
-		auto hsv2rgb = [](float h, float s, float v, float out[3]) {
-			float hsv[3] = { h, s, v };
-			HsvRgb(hsv, out);
-		};
+	const float radii[8] = {Rm,Rv,Re,Rm2,Rj,Rs,Ru,Rn};
+	const float (*colors[8])[3] = {&C_MER,&C_VEN,&C_EAR,&C_MAR,&C_JUP,&C_SAT,&C_URA,&C_NEP};
 
-		for (int i = 0; i < STACKS; ++i) {
-			float v0 = (float)i / STACKS;        // [0,1]
-			float v1 = (float)(i + 1) / STACKS;
+	// 轨道半径（决定“圆多大”）；在你原来的 Xs 基础上微调
+	const float ORBIT_R[8] = { 1.8f, 2.6f, 3.4f, 4.2f, 5.8f, 7.4f, 8.8f, 10.0f };
 
-			// 纬度角：0 在北极，π 在南极
-			float th0 = F_PI * v0;
-			float th1 = F_PI * v1;
+	// 为了每次运行都有不同布局（如果你想固定，可去掉这一行）
+	TimeOfDaySeed();
 
-			// y = cos(theta), r_xy = sin(theta)
-			float y0 = cosf(th0), r0 = sinf(th0);
-			float y1 = cosf(th1), r1 = sinf(th1);
+	for (int i = 0; i < 8; ++i) {
+		PlanetList[i] = MakeUvSphereList(radii[i], 32, 20, *colors[i]);
+		PlanetEdgeList[i] = MakeUvSphereEdgeList(radii[i], 32, 20, (const float[3]){0.f,0.f,0.f}, 1.01f);
 
-			glBegin(GL_TRIANGLES);
-			for (int j = 0; j < SLICES; ++j) {
-				float u0 = (float)j / SLICES;          // [0,1]
-				float u1 = (float)(j + 1) / SLICES;
-
-				float ph0 = F_2_PI * u0;               // 经度角
-				float ph1 = F_2_PI * u1;
-
-				// 环上四点（经度×纬度）
-				float x00 = R * r0 * cosf(ph0);
-				float z00 = R * r0 * sinf(ph0);
-				float y00 = R * y0;
-
-				float x10 = R * r0 * cosf(ph1);
-				float z10 = R * r0 * sinf(ph1);
-				float y10 = R * y0;
-
-				float x11 = R * r1 * cosf(ph1);
-				float z11 = R * r1 * sinf(ph1);
-				float y11 = R * y1;
-
-				float x01 = R * r1 * cosf(ph0);
-				float z01 = R * r1 * sinf(ph0);
-				float y01 = R * y1;
-
-				// 顶点颜色：按纬度在 [20°, 50°] 的 hue 范围内渐变，饱和/明度固定
-				float rgb[3];
-				float hue0 = 50.f - 30.f * v0;  // 北极黄 -> 南极橙红
-				float hue1 = 50.f - 30.f * v1;
-
-				// 三角形1：(00,10,11)
-				hsv2rgb(hue0, 1.f, 1.f, rgb); glColor3fv(rgb); V3(x00, y00, z00);
-				hsv2rgb(hue0, 1.f, 1.f, rgb); glColor3fv(rgb); V3(x10, y10, z10);
-				hsv2rgb(hue1, 1.f, 1.f, rgb); glColor3fv(rgb); V3(x11, y11, z11);
-
-				// 三角形2：(00,11,01)
-				hsv2rgb(hue0, 1.f, 1.f, rgb); glColor3fv(rgb); V3(x00, y00, z00);
-				hsv2rgb(hue1, 1.f, 1.f, rgb); glColor3fv(rgb); V3(x11, y11, z11);
-				hsv2rgb(hue1, 1.f, 1.f, rgb); glColor3fv(rgb); V3(x01, y01, z01);
-			}
-			glEnd();
-		}
+		float ang = RandAngle();
+		PlanetPos[i][0] = ORBIT_R[i] * cosf(ang);  // x
+		PlanetPos[i][1] = 0.0f;                    // y
+		PlanetPos[i][2] = ORBIT_R[i] * sinf(ang);  // z
 	}
-	glEndList();
-
-	printf("[MyObjList:SUN] Vertices Emitted = %d\n", gVertCount);
-
 
 }
 
