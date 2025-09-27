@@ -843,13 +843,18 @@ InitGraphics( )
 // Global Helper Functions
 GLuint MakeUvSphereList(float radius, int slices, int stacks, const float rgb[3]);
 GLuint MakeUvSphereEdgeList(float radius, int slices, int stacks, const float rgb[3], float scale=1.0f);
+GLuint MakePointSphereList(float R, int SLICES, int STACKS,
+                           const float base[3], float alpha,
+                           float lighten = 1.20f, float darken = 0.75f,
+                           float jitter = 0.015f, float pointSize = 1.6f);
+
+// ---- small helpers (define ONCE, before MakeUvSphereList / MakePointSphereList) ----
+static inline float clamp01(float x) { return x < 0.f ? 0.f : (x > 1.f ? 1.f : x); }
+static inline float mixf(float a, float b, float t) { return a + (b - a) * t; }
 
 // Builds a UV-sphere with per-vertex color gradient and fixed alpha.
 // The gradient is a smooth blend between a darker "belt" color (near equator)
 // and a lighter "cap" color (near poles). Alpha controls transparency.
-static inline float clamp01(float x) { return x < 0.f ? 0.f : (x > 1.f ? 1.f : x); }
-static inline float mixf(float a, float b, float t) { return a + (b - a) * t; }
-
 GLuint MakeUvSphereList(float R, int SLICES, int STACKS, const float base[3], float alpha,
                         float lighten = 1.20f, float darken = 0.75f)
 {
@@ -965,6 +970,61 @@ GLuint MakeUvSphereEdgeList(float R, int SLICES, int STACKS, const float rgb[3],
     return lid;
 }
 
+// Builds a "dusty / point-cloud" sphere using GL_POINTS.
+// Color per vertex uses a pole-cap (lighter) to equator-belt (darker) gradient.
+// Small radial jitter adds a noisy star-dust look.
+
+GLuint MakePointSphereList(float R, int SLICES, int STACKS,
+                           const float base[3], float alpha,
+                           float lighten, float darken,
+                           float jitter, float pointSize)
+{
+    float cap[3]  = { clamp01(base[0]*lighten), clamp01(base[1]*lighten), clamp01(base[2]*lighten) };
+    float belt[3] = { clamp01(base[0]*darken ), clamp01(base[1]*darken ), clamp01(base[2]*darken ) };
+
+    GLuint lid = glGenLists(1);
+    glNewList(lid, GL_COMPILE);
+    {
+        glPointSize(pointSize);
+        glBegin(GL_POINTS);
+        for (int i = 0; i <= STACKS; ++i)
+        {
+            float v  = (float)i / STACKS;        // 0..1
+            float th = F_PI * v;                 // 0..PI
+            float yn = cosf(th), r = sinf(th);   // normalized y, ring radius
+
+            for (int j = 0; j < SLICES; ++j)
+            {
+                float u  = (float)j / SLICES;    // 0..1
+                float ph = F_2_PI * u;
+
+                // base position on the sphere
+                float x = r * cosf(ph);
+                float z = r * sinf(ph);
+                float y = yn;
+
+                // small outward jitter along the normal to get "dust"
+                float nrm = sqrtf(x*x + y*y + z*z);
+                float jt  = R * jitter * (Ranf(-1.f, 1.f));
+                float s   = R + jt;
+                float vx  = s * x / nrm;
+                float vy  = s * y / nrm;
+                float vz  = s * z / nrm;
+
+                // gradient factor t in [0,1] from equator->poles
+                float t = 0.5f * (y + 1.f);
+
+                glColor4f(mixf(belt[0],cap[0],t), mixf(belt[1],cap[1],t), mixf(belt[2],cap[2],t), alpha);
+                glVertex3f(vx, vy, vz);
+            }
+        }
+        glEnd();
+    }
+    glEndList();
+    return lid;
+}
+
+
 // initialize the display lists that will not change:
 // (a display list is a way to store opengl commands in
 //  memory so that they can be played back efficiently at a later time
@@ -1052,16 +1112,30 @@ InitLists( )
 		glLineWidth( 1. );
 	glEndList( );
 	
-	// ---------- Sun (gradient + alpha baked into the list) ----------
-	const float SunBase[3] = { 1.0f, 0.8f, 0.2f };     // warm yellow
-	SunList = MakeUvSphereList(
-		1.0f,               // radius
-		48, 32,             // slices, stacks
-		SunBase,            // base color
-		0.65f,              // alpha (semi-transparent)
-		1.25f,              // lighten factor near poles
-		0.85f               // darken factor near equator
+	// // ---------- Sun (gradient + alpha baked into the list) ----------
+	// const float SunBase[3] = { 1.0f, 0.8f, 0.2f };     // warm yellow
+	// SunList = MakeUvSphereList(
+	// 	1.0f,               // radius
+	// 	48, 32,             // slices, stacks
+	// 	SunBase,            // base color
+	// 	0.65f,              // alpha (semi-transparent)
+	// 	1.25f,              // lighten factor near poles
+	// 	0.85f               // darken factor near equator
+	// );
+
+	// Sun: point-cloud style
+	const float SunBase[3] = { 1.0f, 0.8f, 0.2f };
+	SunList = MakePointSphereList(
+		1.0f,     // radius
+		160, 120, // more slices/stacks -> denser points
+		SunBase,
+		0.65f,    // alpha
+		1.25f,    // lighten
+		0.85f,    // darken
+		0.020f,   // jitter (increase a bit for glow)
+		1.8f      // point size
 	);
+
 	// Outline temporarily disabled:
 	// SunEdge = MakeUvSphereEdgeList(1.0f, 48, 32, (const float[3]){0,0,0}, 1.01f);
 
@@ -1084,15 +1158,24 @@ InitLists( )
 
 	// build display lists with per-vertex gradient + alpha
 	for (int i = 0; i < 8; ++i) {
-		PlanetList[i] = MakeUvSphereList(
-			radii[i],    // radius
-			32, 20,      // slices, stacks
+		// PlanetList[i] = MakeUvSphereList(
+		// 	radii[i],    // radius
+		// 	32, 20,      // slices, stacks
+		// 	PlanetBase[i],
+		// 	0.55f,       // alpha (semi-transparent)
+		// 	1.20f,       // lighten factor
+		// 	0.80f        // darken factor
+		// );
+		PlanetList[i] = MakePointSphereList(
+			radii[i],
+			96, 64,                 // enough density but cheaper than the Sun
 			PlanetBase[i],
-			0.55f,       // alpha (semi-transparent)
-			1.20f,       // lighten factor
-			0.80f        // darken factor
+			0.55f,                  // alpha
+			1.20f,                  // lighten
+			0.80f,                  // darken
+			0.010f,                 // smaller jitter for planets
+			1.6f                    // point size
 		);
-
 		// Outline temporarily disabled:
 		// PlanetEdgeList[i] = MakeUvSphereEdgeList(radii[i], 32, 20, (const float[3]){0,0,0}, 1.01f);
 	}
@@ -1204,7 +1287,14 @@ Keyboard( unsigned char c, int x, int y )
 		case ESCAPE:
 			DoMainMenu( QUIT );	// will not return here
 			break;				// happy compiler
+		case '+': case '=':          // US keyboards: '+' shares key with '='
+			Scale *= 1.05f;          // scale up a bit
+			break;
 
+		case '-': case '_':
+			Scale *= 0.95f;          // scale down a bit
+			if (Scale < MINSCALE) Scale = MINSCALE;
+			break;
 		default:
 			fprintf( stderr, "Don't know what to do with keyboard hit: '%c' (0x%0x)\n", c, c );
 	}
