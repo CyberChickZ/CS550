@@ -31,27 +31,9 @@
 #include "glut.h"
 #include "CarouselHorse0.10.550"
 
-//	This is a sample OpenGL / GLUT program
-//
-//	The objective is to draw a 3d object and change the color of the axes
-//		with a glut menu
-//
-//	The left mouse button does rotation
-//	The middle mouse button does scaling
-//	The user interface allows:
-//		1. The axes to be turned on and off
-//		2. The color of the axes to be changed
-//		3. Debugging to be turned on and off
-//		4. Depth cueing to be turned on and off
-//		5. The projection to be changed
-//		6. The transformations to be reset
-//		7. The program to quit
-//
-//	Author:			Joe Graphics
-
 // title of these windows:
 
-const char *WINDOWTITLE = "OpenGL / GLUT Sample -- Joe Graphics";
+const char *WINDOWTITLE = "OpenGL / EECS 550 p2 -- Haochuan Zhang";
 const char *GLUITITLE   = "User Interface Window";
 
 // what the glui package defines as true and false:
@@ -206,7 +188,7 @@ GLuint  SolidHorseList = 0;
 // key-based scaling step (independent of mouse wheel)
 const float KEY_SCALE_STEP = 0.05f;
 GLuint  CircleList = 0;
-const float PATH_RADIUS = 5.0f;
+const float PATH_RADIUS = 2.0f;
 // animation parameters (single horse)
 const float REV_PER_CYCLE        = 1.0f;   // revolutions per Time cycle (Time in [0,1))
 const float BOB_AMPLITUDE        = 0.40f;  // vertical bobbing amplitude (world units)
@@ -215,6 +197,16 @@ const float PITCH_DEG_AMPLITUDE  = 15.0f;  // rocking (pitch) amplitude in degre
 const float PITCH_CYCLES_PER_REV = 2.0f;   // how many pitch cycles per revolution
 // orientation tweak: turn horse from radial (+X) to tangential (+Z)
 const float YAW_TANGENT_FIX_DEG = 90.0f;
+// view modes
+enum ViewMode { VIEW_OUTSIDE, VIEW_INSIDE };
+int  NowView = VIEW_OUTSIDE;   // default: Outside
+
+const float FOV_OUTSIDE = 70.f;
+const float FOV_INSIDE  = 110.f;   // wider FOV for inside view
+
+// Freeze toggle
+bool Frozen = false;
+
 
 // function prototypes:
 
@@ -440,30 +432,53 @@ Display( )
 
 	glMatrixMode( GL_PROJECTION );
 	glLoadIdentity( );
-	if( NowProjection == ORTHO )
+	if( NowView == VIEW_OUTSIDE && NowProjection == ORTHO )
 		glOrtho( -10.f, 10.f,    -10.f, 10.f,    0.1f, 1000.f );
 	else
-		gluPerspective( 70.f, 1.f, 0.1f, 1000.f );
+	{
+		float fovy = (NowView == VIEW_INSIDE) ? FOV_INSIDE : FOV_OUTSIDE;
+		gluPerspective( fovy, 1.f, 0.1f, 1000.f );
+	}
 
 	// place the objects into the scene:
 
 	glMatrixMode( GL_MODELVIEW );
 	glLoadIdentity( );
-
+	
 	// set the eye position, look-at position, and up-vector:
 
-	gluLookAt( 0.f, 4.f, 12.f,    0.f, 0.f, 0.f,     0.f, 1.f, 0.f );
+	if ( NowView == VIEW_OUTSIDE )
+	{
+		gluLookAt( 0.f, 4.f, 12.f,    0.f, 0.f, 0.f,     0.f, 1.f, 0.f );
+	}
+	else
+	{
+		// look from the carousel center (XZ = 0,0), a bit higher, toward current horse
+		float thetaRad = -F_2_PI * (REV_PER_CYCLE * Time); // match rotation sign
+		float lookX = PATH_RADIUS * cosf(thetaRad);
+		float lookZ = PATH_RADIUS * sinf(thetaRad);
+
+		gluLookAt( 0.f, 2.0f, 0.f,    // eye at center, slightly higher
+				lookX, 1.0f, lookZ, // look toward the horse at a comfortable height
+				0.f, 1.f, 0.f );
+	}
+
 
 	// rotate the scene:
 
-	glRotatef( (GLfloat)Yrot, 0.f, 1.f, 0.f );
-	glRotatef( (GLfloat)Xrot, 1.f, 0.f, 0.f );
+	// rotate the scene:
+	if ( NowView == VIEW_OUTSIDE )
+	{
+		glRotatef( (GLfloat)Yrot, 0.f, 1.f, 0.f );
+		glRotatef( (GLfloat)Xrot, 1.f, 0.f, 0.f );
+	}
 
 	// uniformly scale the scene:
-
-	if( Scale < MINSCALE )
-		Scale = MINSCALE;
-	glScalef( (GLfloat)Scale, (GLfloat)Scale, (GLfloat)Scale );
+	if ( NowView == VIEW_OUTSIDE )
+	{
+		if( Scale < MINSCALE ) Scale = MINSCALE;
+		glScalef( (GLfloat)Scale, (GLfloat)Scale, (GLfloat)Scale );
+	}
 
 	// set the fog parameters:
 
@@ -498,81 +513,41 @@ Display( )
 
 	// glCallList( BoxList );
 	// my display
-
-	// === Horse: wireframe ===
-	WireHorseList = glGenLists(1);
-	glNewList(WireHorseList, GL_COMPILE);
-		glPushMatrix();
-			glRotatef(90.f, 0.f, 1.f, 0.f);
-			glTranslatef(0.f, -1.1f, 0.f);
-			glColor3f(1.f, 1.f, 0.f); // yellow
-			glBegin(GL_LINES);
-				for (int i = 0; i < HORSEnedges; i++) {
-					struct point p0 = HORSEpoints[ HORSEedges[i].p0 ];
-					struct point p1 = HORSEpoints[ HORSEedges[i].p1 ];
-					glVertex3f(p0.x, p0.y, p0.z);
-					glVertex3f(p1.x, p1.y, p1.z);
-				}
-			glEnd();
-		glPopMatrix();
-	glEndList();
-
-	// === Horse: solid (fake lighting) ===
-	SolidHorseList = glGenLists(1);
-	glNewList(SolidHorseList, GL_COMPILE);
-		glPushMatrix();
-			glRotatef(90.f, 0.f, 1.f, 0.f);
-			glTranslatef(0.f, -1.1f, 0.f);
-			glBegin(GL_TRIANGLES);
-				for (int i = 0; i < HORSEntris; i++) {
-					struct point p0 = HORSEpoints[ HORSEtris[i].p0 ];
-					struct point p1 = HORSEpoints[ HORSEtris[i].p1 ];
-					struct point p2 = HORSEpoints[ HORSEtris[i].p2 ];
-
-					// fake "lighting" from above:
-					float p01[3], p02[3], n[3];
-					p01[0] = p1.x - p0.x;  p01[1] = p1.y - p0.y;  p01[2] = p1.z - p0.z;
-					p02[0] = p2.x - p0.x;  p02[1] = p2.y - p0.y;  p02[2] = p2.z - p0.z;
-					Cross(p01, p02, n);
-					Unit(n, n);
-					n[1] = (float)fabs(n[1]); // "light" from +Y
-					glColor3f(1.f*n[1], 1.f*n[1], 0.f*n[1]); // yellow scaled by n[1]
-					glVertex3f(p0.x, p0.y, p0.z);
-					glVertex3f(p1.x, p1.y, p1.z);
-					glVertex3f(p2.x, p2.y, p2.z);
-				}
-			glEnd();
-		glPopMatrix();
-	glEndList();
 	
 	glCallList( CircleList );
 	
-	// === Animated single horse (tangent facing) ===
-	glPushMatrix();
+	// === Animated 4 horses, each 90° out of phase (revolve + bob + pitch) ===
+	for (int i = 0; i < 4; ++i)
+	{
+		// phase shift: 0, 0.25, 0.5, 0.75 of the Time cycle (i.e., 90°)
+		float phase = i * 0.25f;
+		float t = Time + phase;
+		t = t - floorf(t); // wrap to [0,1)
 
-	// revolve around world Y-axis:
-	float thetaDeg = 360.0f * REV_PER_CYCLE * Time;
-	glRotatef(thetaDeg, 0.f, 1.f, 0.f);
+		glPushMatrix();
 
-	// move from origin to circle radius along +X:
-	glTranslatef(PATH_RADIUS, 0.f, 0.f);
+		// revolve around world Y-axis:
+		float thetaDeg = 360.0f * REV_PER_CYCLE * t;
+		glRotatef(thetaDeg, 0.f, 1.f, 0.f);
 
-	// yaw +90° so the horse faces the tangential direction (+Z)
-	glRotatef(YAW_TANGENT_FIX_DEG, 0.f, 1.f, 0.f);
+		// move from origin to circle radius along +X:
+		glTranslatef(PATH_RADIUS, 0.f, 0.f);
 
-	// vertical bobbing in local Y:
-	float bobY = BOB_AMPLITUDE * sinf(F_2_PI * (REV_PER_CYCLE * BOB_CYCLES_PER_REV) * Time);
-	glTranslatef(0.f, bobY, 0.f);
+		// yaw +90° so the horse faces tangential direction (+Z after revolve)
+		glRotatef(YAW_TANGENT_FIX_DEG, 0.f, 1.f, 0.f);
 
-	// rocking (pitch) before horse list: rotate about -Z so that, after the list's Y+90, it becomes local +X pitch
-	float pitchPhase = F_2_PI * (REV_PER_CYCLE * PITCH_CYCLES_PER_REV) * Time;
-	float pitchDeg   = PITCH_DEG_AMPLITUDE * sinf(pitchPhase);
-	glRotatef(pitchDeg, 0.f, 0.f, -1.f);  // use -Z here to achieve nose-up/down after the internal Y+90
-	glCallList(SolidHorseList);
+		// vertical bobbing in local Y (also 90° out of phase via t):
+		float bobY = BOB_AMPLITUDE * sinf(F_2_PI * (REV_PER_CYCLE * BOB_CYCLES_PER_REV) * t);
+		glTranslatef(0.f, bobY, 0.f);
 
-	glPopMatrix();
+		// rocking (pitch) — also out of phase using same t:
+		float pitchPhase = F_2_PI * (REV_PER_CYCLE * PITCH_CYCLES_PER_REV) * t;
+		float pitchDeg   = PITCH_DEG_AMPLITUDE * sinf(pitchPhase);
+		glRotatef(pitchDeg, 0.f, 0.f, -1.f);  // -Z so it's nose-up/down in horse's local X
 
-
+		glCallList(SolidHorseList);
+		glPopMatrix();
+	}
 
 
 #ifdef DEMO_Z_FIGHTING
@@ -1113,17 +1088,44 @@ Keyboard( unsigned char c, int x, int y )
 		case ESCAPE:
 			DoMainMenu( QUIT );	// will not return here
 			break;				// happy compiler
+		case 'v':
+		case 'V':
+		{
+			int prev = NowView;
+			NowView = (NowView == VIEW_OUTSIDE) ? VIEW_INSIDE : VIEW_OUTSIDE;
+
+			// when exiting inside -> outside, reset camera controls
+			if (prev == VIEW_INSIDE && NowView == VIEW_OUTSIDE) {
+				Xrot = 0.f;
+				Yrot = 0.f;
+				Scale = 1.f;
+			}
+		}
+		break;
+
 		case '+':
-		case '=':        // '+' on many keyboards is Shift+'='
-			Scale += KEY_SCALE_STEP;
-			if (Scale < MINSCALE) Scale = MINSCALE;   // keep from flipping/inverting
+		case '=': // '+' on many keyboards is Shift+'='
+			if (NowView == VIEW_OUTSIDE) {          // disable scaling changes in inside view
+				Scale += KEY_SCALE_STEP;
+				if (Scale < MINSCALE) Scale = MINSCALE;
+			}
 			break;
 
 		case '-':
-		case '_':        // '_' is Shift+'-'
-			Scale -= KEY_SCALE_STEP;
-			if (Scale < MINSCALE) Scale = MINSCALE;
+		case '_':
+			if (NowView == VIEW_OUTSIDE) {
+				Scale -= KEY_SCALE_STEP;
+				if (Scale < MINSCALE) Scale = MINSCALE;
+			}
 			break;
+		
+		case 'f':
+		case 'F':
+			Frozen = !Frozen;
+			if (Frozen)  glutIdleFunc(NULL);
+			else         glutIdleFunc(Animate);
+			break;
+			
 		default:
 			fprintf( stderr, "Don't know what to do with keyboard hit: '%c' (0x%0x)\n", c, c );
 	}
@@ -1160,17 +1162,17 @@ MouseButton( int button, int state, int x, int y )
 			b = RIGHT;		break;
 
 		case SCROLL_WHEEL_UP:
-			Scale += SCLFACT * SCROLL_WHEEL_CLICK_FACTOR;
-			// keep object from turning inside-out or disappearing:
-			if (Scale < MINSCALE)
-				Scale = MINSCALE;
+			if (NowView == VIEW_OUTSIDE) {
+				Scale += SCLFACT * SCROLL_WHEEL_CLICK_FACTOR;
+				if (Scale < MINSCALE) Scale = MINSCALE;
+			}
 			break;
 
 		case SCROLL_WHEEL_DOWN:
-			Scale -= SCLFACT * SCROLL_WHEEL_CLICK_FACTOR;
-			// keep object from turning inside-out or disappearing:
-			if (Scale < MINSCALE)
-				Scale = MINSCALE;
+			if (NowView == VIEW_OUTSIDE) {
+				Scale -= SCLFACT * SCROLL_WHEEL_CLICK_FACTOR;
+				if (Scale < MINSCALE) Scale = MINSCALE;
+			}
 			break;
 
 		default:
@@ -1211,14 +1213,10 @@ MouseMotion( int x, int y )
 		Yrot += ( ANGFACT*dx );
 	}
 
-	if( ( ActiveButton & MIDDLE ) != 0 )
+	if( ( ActiveButton & MIDDLE ) != 0 && NowView == VIEW_OUTSIDE )
 	{
-		Scale += SCLFACT * (float) ( dx - dy );
-
-		// keep object from turning inside-out or disappearing:
-
-		if( Scale < MINSCALE )
-			Scale = MINSCALE;
+		Scale += SCLFACT * (float)( dx - dy );
+		if( Scale < MINSCALE ) Scale = MINSCALE;
 	}
 
 	Xmouse = x;			// new current position
@@ -1247,6 +1245,7 @@ Reset( )
 	NowColor = YELLOW;
 	NowProjection = PERSP;
 	Xrot = Yrot = 0.;
+	Frozen = false;
 }
 
 
