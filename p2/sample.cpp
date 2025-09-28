@@ -207,6 +207,14 @@ GLuint  SolidHorseList = 0;
 const float KEY_SCALE_STEP = 0.05f;
 GLuint  CircleList = 0;
 const float PATH_RADIUS = 5.0f;
+// animation parameters (single horse)
+const float REV_PER_CYCLE        = 1.0f;   // revolutions per Time cycle (Time in [0,1))
+const float BOB_AMPLITUDE        = 0.40f;  // vertical bobbing amplitude (world units)
+const float BOB_CYCLES_PER_REV   = 2.0f;   // how many bob cycles per revolution
+const float PITCH_DEG_AMPLITUDE  = 15.0f;  // rocking (pitch) amplitude in degrees
+const float PITCH_CYCLES_PER_REV = 2.0f;   // how many pitch cycles per revolution
+// orientation tweak: turn horse from radial (+X) to tangential (+Z)
+const float YAW_TANGENT_FIX_DEG = 90.0f;
 
 // function prototypes:
 
@@ -445,7 +453,7 @@ Display( )
 	// set the eye position, look-at position, and up-vector:
 
 	gluLookAt( 0.f, 4.f, 12.f,    0.f, 0.f, 0.f,     0.f, 1.f, 0.f );
-	
+
 	// rotate the scene:
 
 	glRotatef( (GLfloat)Yrot, 0.f, 1.f, 0.f );
@@ -538,7 +546,34 @@ Display( )
 	glEndList();
 	
 	glCallList( CircleList );
-	glCallList( SolidHorseList );
+	
+	// === Animated single horse (tangent facing) ===
+	glPushMatrix();
+
+	// revolve around world Y-axis:
+	float thetaDeg = 360.0f * REV_PER_CYCLE * Time;
+	glRotatef(thetaDeg, 0.f, 1.f, 0.f);
+
+	// move from origin to circle radius along +X:
+	glTranslatef(PATH_RADIUS, 0.f, 0.f);
+
+	// yaw +90° so the horse faces the tangential direction (+Z)
+	glRotatef(YAW_TANGENT_FIX_DEG, 0.f, 1.f, 0.f);
+
+	// vertical bobbing in local Y:
+	float bobY = BOB_AMPLITUDE * sinf(F_2_PI * (REV_PER_CYCLE * BOB_CYCLES_PER_REV) * Time);
+	glTranslatef(0.f, bobY, 0.f);
+
+	// rocking (pitch) before horse list: rotate about -Z so that, after the list's Y+90, it becomes local +X pitch
+	float pitchPhase = F_2_PI * (REV_PER_CYCLE * PITCH_CYCLES_PER_REV) * Time;
+	float pitchDeg   = PITCH_DEG_AMPLITUDE * sinf(pitchPhase);
+	glRotatef(pitchDeg, 0.f, 0.f, -1.f);  // use -Z here to achieve nose-up/down after the internal Y+90
+	glCallList(SolidHorseList);
+
+	glPopMatrix();
+
+
+
 
 #ifdef DEMO_Z_FIGHTING
 	if( DepthFightingOn != 0 )
