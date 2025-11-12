@@ -29,7 +29,7 @@
 #endif
 
 #include "glut.h"
-
+#include <string.h>
 
 //	This is a sample OpenGL / GLUT program
 //
@@ -47,11 +47,11 @@
 //		6. The transformations to be reset
 //		7. The program to quit
 //
-//	Author:			Joe Graphics
+//	Author:			Haochuan Zhang
 
 // title of these windows:
 
-const char *WINDOWTITLE = "OpenGL / GLUT Sample -- Joe Graphics";
+const char *WINDOWTITLE = "Project 3 -- Haochuan Zhang";
 const char *GLUITITLE   = "User Interface Window";
 
 // what the glui package defines as true and false:
@@ -200,6 +200,55 @@ float	Time;					// used for animation, this has a value between 0. and 1.
 int		Xmouse, Ymouse;			// mouse values
 float	Xrot, Yrot;				// rotation angles in degrees
 
+// myvar
+// scale factor for the loaded OBJ (models vary in unit size)
+float   OBJ_SCALE = 0.5f;     // tweak if your OBJ looks too big/small
+GLuint  FloorDL;               // display list for the floor grid
+GLuint  WallBackDL;            // display list for the back wall (Z-)
+GLuint  WallRightDL;           // display list for the right wall (X+)
+
+GLuint  DinoDL;                  // lit object: loaded from .obj
+GLuint  DogDL;                  // lit object: loaded from .obj
+GLuint  DuckyDL;                // lit object: loaded from .obj
+
+// ===== Lighting / Animation state =====
+enum LightMode { POINT_LIGHT = 0, SPOT_LIGHT = 1 };
+int     gLightMode = POINT_LIGHT;        // 'p' point, 's' spot
+bool    Frozen = false;                  // 'f' toggle idle animation
+
+// animated light path
+#define SPEED         3.f                // angular speed multiplier
+#define LIGHTRADIUS   3.0f               // radius of the circular path
+#define LIGHT_Y       1.0f               // constant light height
+
+// current light color (defaults to white)
+float gLightColor[4] = {1.f, 1.f, 1.f, 1.f};   // w/r/o/y/g/c/m keys
+
+// pre-defined light colors
+static const float COL_WHITE[4]  = {1.f, 1.f, 1.f, 1.f};
+static const float COL_RED[4]    = {1.f, 0.f, 0.f, 1.f};
+static const float COL_ORANGE[4] = {1.f, 0.5f, 0.f, 1.f};
+static const float COL_YELLOW[4] = {1.f, 1.f, 0.f, 1.f};
+static const float COL_GREEN[4]  = {0.f, 1.f, 0.f, 1.f};
+static const float COL_CYAN[4]   = {0.f, 1.f, 1.f, 1.f};
+static const float COL_MAG[4]    = {1.f, 0.f, 1.f, 1.f};
+
+// Tunable grid sizes:
+#define XSIDE   8.f
+#define ZSIDE   8.f
+#define YSIDE   4.f
+
+#define NX      800          // floor/walls subdivision along X
+#define NZ      800          // floor/right-wall subdivision along Z
+#define NY      400          // back/right-wall subdivision along Y
+
+#define X0      (-XSIDE/2.f)
+#define Z0      (-ZSIDE/2.f)
+#define Y0      (-YSIDE/2.f)
+
+#define DX      (XSIDE / (float)NX)
+#define DZ      (ZSIDE / (float)NZ)
+#define DY      (YSIDE / (float)NY)
 
 // function prototypes:
 
@@ -233,6 +282,9 @@ float			Dot(float [3], float [3]);
 float			Unit(float [3], float [3]);
 float			Unit(float [3]);
 
+// helpers to probe obj files before loading:
+bool FileExists(const char* path);
+bool ObjHasNormals(const char* path);
 
 // utility to create an array from 3 separate values:
 
@@ -310,8 +362,8 @@ TimeOfDaySeed( )
 #include "osucube.cpp"
 #include "osucylindercone.cpp"
 #include "osutorus.cpp"
-//#include "bmptotexture.cpp"
-//#include "loadobjmtlfiles.cpp"
+#include "bmptotexture.cpp"
+#include "loadobjmtlfiles.cpp"
 //#include "keytime.cpp"
 //#include "glslprogram.cpp"
 //#include "vertexbufferobject.cpp"
@@ -369,6 +421,7 @@ void
 Animate( )
 {
 	// put animation stuff in here -- change some global variables for Display( ) to find:
+	if (Frozen) return;   // pause all animations when frozen
 
 	int ms = glutGet(GLUT_ELAPSED_TIME);
 	ms %= MS_PER_CYCLE;							// makes the value of ms between 0 and MS_PER_CYCLE-1
@@ -405,9 +458,12 @@ Display( )
 #endif
 
 
-	// specify shading to be flat:
+	// // specify shading to be flat:
 
-	glShadeModel( GL_FLAT );
+	// glShadeModel( GL_FLAT );
+
+	// use per-vertex smooth shading for lighting demonstration:
+	glShadeModel( GL_SMOOTH );
 
 	// set the viewport to be a square centered in the window:
 
@@ -437,7 +493,8 @@ Display( )
 
 	// set the eye position, look-at position, and up-vector:
 
-	gluLookAt( 0.f, 0.f, 3.f,     0.f, 0.f, 0.f,     0.f, 1.f, 0.f );
+	// gluLookAt( 0.f, 0.f, 3.f,     0.f, 0.f, 0.f,     0.f, 1.f, 0.f );
+	gluLookAt( 0.f, 0.f, 6.f,     0.f, 0.f, 0.f,     0.f, 1.f, 0.f ); // pull camera back 2x
 
 	// rotate the scene:
 
@@ -449,6 +506,67 @@ Display( )
 	if( Scale < MINSCALE )
 		Scale = MINSCALE;
 	glScalef( (GLfloat)Scale, (GLfloat)Scale, (GLfloat)Scale );
+	glEnable( GL_NORMALIZE );
+	// Keep normals unit-length after glScalef so specular highlights look correct:
+
+    // =================== Animated Light Setup ===================
+    // Compute circular path on XZ plane (counter-clockwise when seen from +Y)
+    float theta = SPEED * F_2_PI * Time;
+    float xlight = -LIGHTRADIUS * cosf(theta);
+    float zlight =  LIGHTRADIUS * sinf(theta);
+    float ylight =  LIGHT_Y;
+
+    // Common light parameters
+    glEnable(GL_LIGHTING);
+    glEnable(GL_LIGHT0);
+
+    // Set light color (diffuse/specular); keep ambient low/zero for clarity
+    float ambient[4]  = {0.f, 0.f, 0.f, 1.f};
+    glLightfv(GL_LIGHT0, GL_AMBIENT,  ambient);
+    glLightfv(GL_LIGHT0, GL_DIFFUSE,  gLightColor);
+    glLightfv(GL_LIGHT0, GL_SPECULAR, gLightColor);
+
+    // Position (transformed by current MODELVIEW!)
+    float pos[4] = { xlight, ylight, zlight, 1.f };    // positional light
+    glLightfv(GL_LIGHT0, GL_POSITION, pos);
+
+    // No attenuation (recommended by assignment)
+    glLightf(GL_LIGHT0, GL_CONSTANT_ATTENUATION,  1.f);
+    glLightf(GL_LIGHT0, GL_LINEAR_ATTENUATION,    0.f);
+    glLightf(GL_LIGHT0, GL_QUADRATIC_ATTENUATION, 0.f);
+
+    if (gLightMode == POINT_LIGHT)
+    {
+        // Ensure spot is disabled
+        glLightf(GL_LIGHT0, GL_SPOT_CUTOFF,   180.f);  // > 90 disables spotlight behavior
+        glLightf(GL_LIGHT0, GL_SPOT_EXPONENT, 0.f);
+    }
+    else // SPOT_LIGHT
+    {
+        // Point the spotlight horizontally toward the BACK wall (Z-)
+        // Use a target directly "behind" the light on Z- plane
+        // target point: project to the back wall Z = ZWALL
+        extern const float ZWALL; // use the constant from InitLists scope? -> re-declare local copy:
+        float zBack = -ZSIDE/2.f;      // same as ZWALL where the back wall is placed
+        float target[3] = { xlight, ylight, zBack };
+        float dir[3] = { target[0]-xlight, target[1]-ylight, target[2]-zlight }; // -> (0,0, zBack - zlight)
+        // normalize:
+        float dlen = sqrtf(dir[0]*dir[0] + dir[1]*dir[1] + dir[2]*dir[2]);
+        if (dlen > 0.f) { dir[0]/=dlen; dir[1]/=dlen; dir[2]/=dlen; }
+
+        glLightfv(GL_LIGHT0, GL_SPOT_DIRECTION, dir);
+        glLightf (GL_LIGHT0, GL_SPOT_CUTOFF,    18.f);    // spotlight cone angle (degrees)
+        glLightf (GL_LIGHT0, GL_SPOT_EXPONENT,  20.f);     // hotspot falloff
+    }
+
+    // --- Draw a small unlit sphere at the light's position ---
+    glDisable(GL_LIGHTING);
+    glPushMatrix();
+        glTranslatef(xlight, ylight, zlight);
+        glColor3f(gLightColor[0], gLightColor[1], gLightColor[2]);  // unlit blob
+        OsuSphere(0.10f, 24, 16);
+    glPopMatrix();
+
 
 	// set the fog parameters:
 
@@ -474,14 +592,61 @@ Display( )
 		glCallList( AxesList );
 	}
 
-	// since we are using glScalef( ), be sure the normals get unitized:
+    // ---------------------------
+    // Lit geometry: floor + two walls
+    // ---------------------------
+    glEnable(GL_LIGHTING);
+    glEnable(GL_LIGHT0);            // default white directional for now
+    glCallList(FloorDL);
+    glCallList(WallBackDL);
+    glCallList(WallRightDL);
+    glDisable(GL_LIGHTING);         // keep axes/text/unlit objects unaffected for now
 
-	glEnable( GL_NORMALIZE );
+	// ---------------------------
+    // Lit objects: 3 OBJ models, colored R / G / B
+    // ---------------------------
+    glEnable(GL_LIGHTING);
+    glEnable(GL_LIGHT0);
 
+   // 1) DINO - RED (dull) -- scale down 4x and rotate +Y clockwise 90 degrees
+    glPushMatrix();
+        glTranslatef(-1.8f, 0.4f, 0.0f);           // place at left
+        // Order matters: last specified is applied first to the model.
+        // We want: scale -> rotate -> translate
+        glRotatef(-90.f, 0.f, 1.f, 0.f);           // clockwise around +Y as viewed from above
+        glScalef( OBJ_SCALE * 0.25f,               // 4x smaller than current OBJ_SCALE
+                  OBJ_SCALE * 0.25f,
+                  OBJ_SCALE * 0.25f );
+        SetMaterial(1.00f, 0.10f, 0.10f, 15.f);     // red, very dull
+        GLfloat spec_dull[4] = {0.05f, 0.05f, 0.05f, 1.f};
+        glMaterialfv(GL_FRONT, GL_SPECULAR, spec_dull);
 
-	// draw the box object by calling up its display list:
+        if (DinoDL) glCallList(DinoDL);
+    glPopMatrix();
 
-	glCallList( BoxList );
+    // 2) DOG - GREEN (medium)
+    glPushMatrix();
+        glTranslatef( 0.0f, 0.0f, 0.0f);          // center-back
+        glScalef( OBJ_SCALE, OBJ_SCALE, OBJ_SCALE );
+		SetMaterial(0.15f, 0.85f, 0.20f, 40.f);    // medium
+        GLfloat spec_mid[4] = {0.4f, 0.4f, 0.4f, 1.f};
+        glMaterialfv(GL_FRONT, GL_SPECULAR, spec_mid);
+
+        if (DogDL) glCallList(DogDL);
+    glPopMatrix();
+
+    // 3) DUCKY - BLUE (shiny)
+    glPushMatrix();
+        glTranslatef( 1.8f, 0.0f, 0.0f);           // right
+        glScalef( OBJ_SCALE, OBJ_SCALE, OBJ_SCALE );
+        SetMaterial(0.15f, 0.45f, 1.00f, 200.f);   // very shiny
+        GLfloat spec_high[4] = {1.f, 1.f, 1.f, 1.f};
+        glMaterialfv(GL_FRONT, GL_SPECULAR, spec_high);
+
+        if (DuckyDL) glCallList(DuckyDL);
+    glPopMatrix();
+
+    glDisable(GL_LIGHTING);  // leave axes/text unlit
 
 #ifdef DEMO_Z_FIGHTING
 	if( DepthFightingOn != 0 )
@@ -710,6 +875,8 @@ InitGraphics( )
 	// set the framebuffer clear values:
 
 	glClearColor( BACKCOLOR[0], BACKCOLOR[1], BACKCOLOR[2], BACKCOLOR[3] );
+	// Make specular highlights computed w.r.t. the actual eye position:
+    glLightModeli(GL_LIGHT_MODEL_LOCAL_VIEWER, GL_TRUE);
 
 	// setup the callback functions:
 	// DisplayFunc -- redraw the window
@@ -864,6 +1031,72 @@ InitLists( )
 			Axes( 1.5 );
 		glLineWidth( 1. );
 	glEndList( );
+
+	// ---------------------------
+    // Floor and two walls (dense grids for smooth lighting)
+    // ---------------------------
+
+    const float ZWALL = -ZSIDE/2.f;   // back wall placed at Z- (normal points +Z, into room)
+    const float XWALL = +XSIDE/2.f;   // right wall placed at X+ (normal points -X, into room)
+
+    // --- Floor ---
+    FloorDL = glGenLists(1);
+    glNewList(FloorDL, GL_COMPILE);
+        // Slight greenish tint to differentiate the surface; neutral-ish
+        SetMaterial(0.60f, 0.80f, 0.60f, 30.f);   // (r,g,b, shininess)
+        glNormal3f(0.f, 1.f, 0.f);                // up, into the scene volume
+        for (int i = 0; i < NZ; ++i)
+        {
+            glBegin(GL_QUAD_STRIP);
+            for (int j = 0; j <= NX; ++j)
+            {
+                glVertex3f(X0 + DX * (float)j, Y0, Z0 + DZ * (float)(i + 0));
+                glVertex3f(X0 + DX * (float)j, Y0, Z0 + DZ * (float)(i + 1));
+            }
+            glEnd();
+        }
+    glEndList();
+
+    // --- Back Wall (Z-) ---
+    WallBackDL = glGenLists(1);
+    glNewList(WallBackDL, GL_COMPILE);
+        // Slight bluish tint to tell it from floor/wall
+        SetMaterial(0.70f, 0.70f, 0.85f, 20.f);
+        glNormal3f(0.f, 0.f, 1.f);                // facing +Z, i.e., into the room
+        for (int i = 0; i < NY; ++i)
+        {
+            glBegin(GL_QUAD_STRIP);
+            for (int j = 0; j <= NX; ++j)
+            {
+                glVertex3f(X0 + DX * (float)j, Y0 + DY * (float)(i + 0), ZWALL);
+                glVertex3f(X0 + DX * (float)j, Y0 + DY * (float)(i + 1), ZWALL);
+            }
+            glEnd();
+        }
+    glEndList();
+
+    // --- Right Wall (X+) ---
+    WallRightDL = glGenLists(1);
+    glNewList(WallRightDL, GL_COMPILE);
+        // Slight reddish tint
+        SetMaterial(0.85f, 0.70f, 0.70f, 20.f);
+        glNormal3f(-1.f, 0.f, 0.f);               // facing -X, i.e., into the room
+        for (int i = 0; i < NY; ++i)
+        {
+            glBegin(GL_QUAD_STRIP);
+            for (int j = 0; j <= NZ; ++j)
+            {
+                glVertex3f(XWALL, Y0 + DY * (float)(i + 0), Z0 + DZ * (float)j);
+                glVertex3f(XWALL, Y0 + DY * (float)(i + 1), Z0 + DZ * (float)j);
+            }
+            glEnd();
+        }
+    glEndList();
+
+	// =================== LOAD OBJ ===================
+	DinoDL = LoadObjMtlFiles( (char *)"dino.obj" );
+	DogDL = LoadObjMtlFiles( (char *)"dog.obj" );
+	DuckyDL = LoadObjMtlFiles( (char *)"ducky.obj" );
 }
 
 
@@ -942,21 +1175,58 @@ Keyboard( unsigned char c, int x, int y )
 
 	switch( c )
 	{
-		case 'o':
-		case 'O':
-			NowProjection = ORTHO;
-			break;
+		// case 'o':
+		// case 'O':
+		// 	NowProjection = ORTHO;
+		// 	break;
 
-		case 'p':
-		case 'P':
-			NowProjection = PERSP;
-			break;
+		// case 'p':
+		// case 'P':
+		// 	NowProjection = PERSP;
+		// 	break;
 
 		case 'q':
 		case 'Q':
 		case ESCAPE:
 			DoMainMenu( QUIT );	// will not return here
 			break;				// happy compiler
+
+		// Zoom in/out using keyboard since trackpad pinch may not work:
+        case '+':      // common on some layouts when Shift is held
+        case '=':      // '=' often maps to '+' with Shift on US keyboards
+        {
+            Scale += SCLFACT * SCROLL_WHEEL_CLICK_FACTOR;   // reuse wheel step
+            if (Scale < MINSCALE) Scale = MINSCALE;         // clamp
+        }
+        break;
+
+        case '-':
+        case '_':
+        {
+            Scale -= SCLFACT * SCROLL_WHEEL_CLICK_FACTOR;
+            if (Scale < MINSCALE) Scale = MINSCALE;
+        }
+        break;
+		
+        // ---- Light color keys ----
+        case 'w': case 'W': memcpy(gLightColor, COL_WHITE,  sizeof(gLightColor)); break;
+        case 'r': case 'R': memcpy(gLightColor, COL_RED,    sizeof(gLightColor)); break;
+        case 'o': case 'O': memcpy(gLightColor, COL_ORANGE, sizeof(gLightColor)); break;
+        case 'y': case 'Y': memcpy(gLightColor, COL_YELLOW, sizeof(gLightColor)); break;
+        case 'g': case 'G': memcpy(gLightColor, COL_GREEN,  sizeof(gLightColor)); break;
+        case 'c': case 'C': memcpy(gLightColor, COL_CYAN,   sizeof(gLightColor)); break;
+        case 'm': case 'M': memcpy(gLightColor, COL_MAG,    sizeof(gLightColor)); break;
+
+        // ---- Light mode ----
+        case 'p': case 'P': gLightMode = POINT_LIGHT; break;
+        case 's': case 'S': gLightMode = SPOT_LIGHT;  break;
+
+        // ---- Freeze/unfreeze animation ----
+        case 'f': case 'F':
+            Frozen = !Frozen;
+            if (Frozen) glutIdleFunc(NULL);
+            else        glutIdleFunc(Animate);
+            break;
 
 		default:
 			fprintf( stderr, "Don't know what to do with keyboard hit: '%c' (0x%0x)\n", c, c );
@@ -1081,6 +1351,12 @@ Reset( )
 	NowColor = YELLOW;
 	NowProjection = PERSP;
 	Xrot = Yrot = 0.;
+    Frozen = false;
+    gLightMode = POINT_LIGHT;
+    gLightColor[0] = COL_WHITE[0];
+    gLightColor[1] = COL_WHITE[1];
+    gLightColor[2] = COL_WHITE[2];
+    gLightColor[3] = COL_WHITE[3];
 }
 
 
