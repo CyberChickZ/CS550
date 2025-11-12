@@ -66,7 +66,6 @@ float Unit( float [3], float [3] );
 // #include "glslprogram.cpp"
 
 // ---------------------------------------------------------------------
-#define MS_PER_CYCLE 10000
 #define DEG2RAD(d)   ((d)*(M_PI/180.f))
 #define RAD2DEG(r)   ((r)*(180.f/M_PI))
 
@@ -77,12 +76,13 @@ int   MainWindow = 0;
 int   WindowWidth = 1024, WindowHeight = 768;
 
 // time / toggles
-float TimeFrac = 0.f;
+float GlobalTime = 0.f;
 bool  UseTexture = true;     // 't'
 bool  ObjMotionOn = true;    // ';'
 bool  LightMotionOn = true;  // '''
 int   LightType = 0;         // 0=Point, 1=Spot  ('k')
 int   MatPaletteIdx = 0;     // 'l'
+int   LightColorIdx = 0;     // 'c'
 int   NowObject = 0;         // 0..9, cycled by ',' '.'
 int   LookSlot = -1;         // -1=free, 0..9 objects, 10=FarView  ('1')
 
@@ -105,7 +105,15 @@ struct ObjectInfo{
     GLuint      displayList=0;
     float       orbitR=0.f;
     float       orbitSpd=0.f;
+    float       orbitMinor=0.f;
+    float       orbitPhase=0.f;
+    float       orbitCenter[3] = {0.f,0.f,0.f};
+    float       orbitTilt=0.f;
+    float       orbitIncline=0.f;     // degrees; tilt orbit plane around X
+    float       orbitAscending=0.f;   // degrees; rotate plane around Y
     float       selfSpd=0.f;
+    float       selfPhase=0.f;
+    float       spinAxis[3] = {0.f,1.f,0.f};
     float       scale=1.f;
     float       wx=0.f, wy=0.f, wz=0.f;
     float       camLocal[3] = {0.f,0.f,3.f};
@@ -114,18 +122,19 @@ struct ObjectInfo{
 };
 
 static ObjectInfo Objects[] = {
-    { "Mercury","mercury.bmp", G_SPHERE,'0' },
-    { "Venus",  "venus.bmp",   G_TORUS, '1' },
-    { "Earth",  "earth.bmp",   G_CUBE,  '2' },
-    { "Mars",   "mars.bmp",    G_CYL,   '3' },
-    { "Moon",   "moon.bmp",    G_CONE,  '4' },
-    { "Jupiter","jupiter.bmp", G_OBJ,   '5', 0,0, 7.0f,0.25f,0.8f,1.3f,0,0,0,{0,0,5},0,"dog.obj"   },
-    { "Saturn", "saturn.bmp",  G_OBJ,   '6', 0,0, 9.0f,0.20f,0.6f,1.3f,0,0,0,{0,0,6},0,"ducky.obj" },
-    { "Uranus", "uranus.bmp",  G_OBJ,   '7', 0,0,11.0f,0.16f,0.5f,1.2f,0,0,0,{0,0,6},0,"dino.obj"  },
-    { "Neptune","neptune.bmp", G_SPHERE,'8' },
-    { "Pluto",  "pluto.bmp",   G_SPHERE,'9' },
+    { "Sol Duck","sun.bmp",     G_OBJ,    '0',0,0, 0.0f,0.0f, 0.0f,0.0f,{0.f,0.f,0.f},0.0f, 0.0f, 0.0f, 0.72f,0.0f,{0.f,1.f,0.f}, 2.0f,0,0,0,{0.f,1.4f,8.0f},0,"ducky.obj" },
+    { "Mercury", "mercury.bmp", G_SPHERE, '1',0,0, 8.0f,1.35f,7.4f,0.2f,{0.f,0.f,0.f},0.12f, 7.0f, 25.f, 3.5f,0.3f,{0.2f,0.95f,0.24f}, 0.6f,0,0,0,{0.f,0.25f,3.5f},0,nullptr },
+    { "Venus",   "venus.bmp",   G_CUBE,   '2',0,0,11.0f,1.05f,10.1f,0.9f,{0.f,0.f,0.f},0.10f, 3.4f, 40.f, 2.4f,0.5f,{0.f,1.f,0.f}, 0.9f,0,0,0,{0.f,0.35f,3.8f},0,nullptr },
+    { "Earth",   "earth.bmp",   G_CYL,    '3',0,0,14.0f,0.85f,12.9f,1.7f,{0.f,0.f,0.f},0.20f, 1.5f,125.f, 2.2f,0.8f,{0.1f,0.97f,0.25f}, 1.1f,0,0,0,{0.f,0.45f,4.0f},0,nullptr },
+    { "Mars",    "mars.bmp",    G_CONE,   '4',0,0,17.0f,0.75f,15.5f,2.4f,{0.f,0.f,0.f},0.22f, 2.1f, 60.f, 1.9f,1.1f,{0.32f,0.85f,0.42f}, 0.95f,0,0,0,{0.f,0.40f,3.8f},0,nullptr },
+    { "Jupiter", "jupiter.bmp", G_TORUS,  '5',0,0,21.0f,0.55f,19.2f,3.1f,{0.f,0.f,0.f},0.28f, 1.3f, 15.f, 1.3f,1.6f,{0.f,1.f,0.f}, 1.5f,0,0,0,{0.f,0.55f,4.5f},0,nullptr },
+    { "Saturn",  "saturn.bmp",  G_SPHERE, '6',0,0,25.0f,0.45f,22.5f,0.6f,{0.f,0.f,0.f},0.32f, 2.8f, 75.f, 1.1f,2.1f,{0.15f,0.95f,0.28f}, 1.3f,0,0,0,{0.f,0.60f,4.8f},0,nullptr },
+    { "Uranus",  "uranus.bmp",  G_CUBE,   '7',0,0,29.0f,0.35f,26.1f,1.3f,{0.f,0.f,0.f},0.35f, 0.8f,110.f, 0.9f,2.8f,{0.0f,0.25f,1.f}, 1.2f,0,0,0,{0.f,0.65f,5.0f},0,nullptr },
+    { "Neptune", "neptune.bmp", G_CYL,    '8',0,0,33.0f,0.30f,29.5f,2.0f,{0.f,0.f,0.f},0.38f, 1.1f,150.f, 0.8f,3.2f,{0.2f,0.6f,0.77f}, 1.1f,0,0,0,{0.f,0.70f,5.3f},0,nullptr },
+    { "Pluto",   "pluto.bmp",   G_CONE,   '9',0,0,37.0f,0.24f,33.2f,2.7f,{0.f,0.f,0.f},0.40f, 4.5f,210.f, 0.7f,3.8f,{0.3f,0.8f,0.5f}, 0.8f,0,0,0,{0.f,0.75f,5.6f},0,nullptr },
 };
 static const int NUMOBJECTS = (int)(sizeof(Objects)/sizeof(Objects[0]));
+static const int SUN_INDEX = 0;
 
 // material presets (cycled by 'l'); I use SetMaterial(r,g,b,shininess).
 struct MatPreset{ float dif[3]; float shininess; };
@@ -169,14 +178,65 @@ static void LoadTextureBMP(const char* file, GLuint* tex){
     glTexImage2D(GL_TEXTURE_2D,0,GL_RGB,w,h,0,GL_RGB,GL_UNSIGNED_BYTE,ptr);
 }
 
+static float Dot3(const float a[3], const float b[3]){
+    return a[0]*b[0]+a[1]*b[1]+a[2]*b[2];
+}
+
+static void Cross3(const float a[3], const float b[3], float out[3]){
+    out[0] = a[1]*b[2] - a[2]*b[1];
+    out[1] = a[2]*b[0] - a[0]*b[2];
+    out[2] = a[0]*b[1] - a[1]*b[0];
+}
+
+static void Normalize3(float v[3]){
+    float len = sqrtf(v[0]*v[0]+v[1]*v[1]+v[2]*v[2]);
+    if(len < 1e-5f){ v[0]=0.f; v[1]=1.f; v[2]=0.f; return; }
+    v[0]/=len; v[1]/=len; v[2]/=len;
+}
+
+static void BuildPlaneBasis(const float normal[3], float u[3], float v[3]){
+    float n[3] = {normal[0],normal[1],normal[2]};
+    Normalize3(n);
+    float ref[3] = {0.f,1.f,0.f};
+    if(fabsf(Dot3(n,ref)) > 0.9f){
+        ref[0]=1.f; ref[1]=0.f; ref[2]=0.f;
+    }
+    Cross3(ref,n,u);
+    Normalize3(u);
+    Cross3(n,u,v);
+    Normalize3(v);
+}
+
 static void PrimeNonObjDefaults(){
     for(int i=0;i<NUMOBJECTS;i++){
-        if(Objects[i].gtype!=G_OBJ){
+        const bool isSun = (i==SUN_INDEX);
+        if(Objects[i].orbitR==0.f && !isSun){
             float baseR = 3.f + 1.f*i;
-            Objects[i].orbitR   = baseR;
-            Objects[i].orbitSpd = 0.35f - 0.02f*i;
+            Objects[i].orbitR = baseR;
+        }
+        if(Objects[i].orbitMinor==0.f && !isSun){
+            Objects[i].orbitMinor = 0.8f*Objects[i].orbitR;
+        }
+        if(Objects[i].orbitSpd==0.f && !isSun){
+            Objects[i].orbitSpd = 0.20f - 0.015f*i;
+        }
+        if(Objects[i].orbitTilt==0.f && !isSun){
+            Objects[i].orbitTilt = 0.15f;
+        }
+        if(Objects[i].orbitIncline==0.f && !isSun){
+            Objects[i].orbitIncline = 1.5f * i;
+        }
+        if(Objects[i].orbitAscending==0.f && !isSun){
+            Objects[i].orbitAscending = 12.f * i;
+        }
+        if(Objects[i].selfSpd==0.f){
             Objects[i].selfSpd  = 0.8f  + 0.05f*i;
+        }
+        if(Objects[i].scale==0.f){
             Objects[i].scale    = (Objects[i].gtype==G_SPHERE)?1.f:1.1f;
+        }
+        Normalize3(Objects[i].spinAxis);
+        if(fabsf(Objects[i].camLocal[2])<1e-4f){
             Objects[i].camLocal[0]=0.f;
             Objects[i].camLocal[1]=0.3f*Objects[i].scale;
             Objects[i].camLocal[2]=3.f*Objects[i].scale+2.f;
@@ -189,13 +249,227 @@ static void ApplyMaterial(int idx){
     SetMaterial(gMats[idx].dif[0], gMats[idx].dif[1], gMats[idx].dif[2], gMats[idx].shininess);
 }
 
+static const GLfloat SUN_EMISSION[4]    = {1.4f,1.2f,0.5f,1.f};
+static const GLfloat LIGHT_EMISSION[4]  = {1.3f,1.3f,1.1f,1.f};
+static const GLfloat NO_EMISSION[4]     = {0.f,0.f,0.f,1.f};
+static const float   LIGHT_INTENSITY    = 1.4f;
+static const float   ORBIT_SPEED_SCALE = 0.25f;
+static const float   SPIN_SPEED_SCALE  = 0.25f;
+
+struct LightColorPreset{
+    float rgb[3];
+};
+static LightColorPreset gLightColors[] = {
+    {{1.f,1.f,1.f}},
+    {{1.0f,0.85f,0.5f}},
+    {{0.6f,0.8f,1.0f}},
+    {{1.0f,0.6f,0.7f}}
+};
+static const int NUM_LIGHT_COLORS = (int)(sizeof(gLightColors)/sizeof(gLightColors[0]));
+static const char* kLightColorNames[] = { "White", "Warm", "Cool", "Rose" };
+
+static void ResetOrbitCamera(){
+    LookSlot = -1;
+    CamDist = 24.f;
+    CamAzim = 45.f;
+    CamElev = 22.f;
+    ViewBiasYaw = 0.f;
+    ViewBiasPitch = 0.f;
+}
+
+static void BakeDisplayListForObject(int idx){
+    if(idx<0 || idx>=NUMOBJECTS) return;
+    glNewList(Objects[idx].displayList, GL_COMPILE);
+    switch(Objects[idx].gtype){
+        case G_SPHERE: OsuSphere(1.f,64,64); break;
+        case G_CUBE:   OsuCube(1.f); break;
+        case G_CYL:    OsuCylinder(0.5f,1.0f,64,32); break;
+        case G_CONE:   OsuCone(1.0f,0.2f,1.0f,64,32); break;
+        case G_TORUS:  OsuTorus(0.25f,1.0f,96,96); break;
+        case G_OBJ:
+            if(Objects[idx].objSourceDL) glCallList(Objects[idx].objSourceDL);
+            else OsuSphere(1.f,48,32);
+            break;
+    }
+    glEndList();
+}
+
+static const GeomType kShapeCycle[] = { G_SPHERE, G_CUBE, G_CYL, G_CONE, G_TORUS };
+static const int NUM_SHAPE_CYCLE = (int)(sizeof(kShapeCycle)/sizeof(kShapeCycle[0]));
+
+static const char* GeomTypeName(GeomType g){
+    switch(g){
+        case G_SPHERE: return "Sphere";
+        case G_CUBE:   return "Cube";
+        case G_CYL:    return "Cylinder";
+        case G_CONE:   return "Cone";
+        case G_TORUS:  return "Torus";
+        case G_OBJ:    return "OBJ";
+    }
+    return "?";
+}
+
+static int CurrentMutableIndex(){
+    if(LookSlot>=0 && LookSlot<NUMOBJECTS) return LookSlot;
+    return NowObject;
+}
+
+static void AdjustCurrentShape(int step){
+    if(NUM_SHAPE_CYCLE == 0) return;
+    int idx = CurrentMutableIndex();
+    if(idx<0 || idx>=NUMOBJECTS) return;
+    if(idx==SUN_INDEX) return;
+    GeomType cur = Objects[idx].gtype;
+    int curIdx = 0;
+    bool found=false;
+    for(int i=0;i<NUM_SHAPE_CYCLE;i++){
+        if(kShapeCycle[i]==cur){ curIdx=i; found=true; break; }
+    }
+    if(!found) curIdx=0;
+    int nextIdx = (curIdx + step)%NUM_SHAPE_CYCLE;
+    if(nextIdx<0) nextIdx += NUM_SHAPE_CYCLE;
+    Objects[idx].gtype = kShapeCycle[nextIdx];
+    glutSetWindow(MainWindow);
+    BakeDisplayListForObject(idx);
+}
+
+static void AdjustViewZoom(float delta){
+    if(LookSlot>=0 && LookSlot<NUMOBJECTS){
+        float& cz = Objects[LookSlot].camLocal[2];
+        cz = Clamp(cz + delta, 1.f, 50.f);
+    }else{
+        CamDist = Clamp(CamDist + delta, 3.f, 150.f);
+    }
+}
+
+static float DrawSegment(float x,float y,const char* text,float r,float g,float b){
+    if(!text) return x;
+    glColor3f(r,g,b);
+    glRasterPos2f(x,y);
+    int width = 0;
+    for(const char* c=text; *c; ++c){
+        glutBitmapCharacter(GLUT_BITMAP_8_BY_13, *c);
+        width += glutBitmapWidth(GLUT_BITMAP_8_BY_13, *c);
+    }
+    return x + (float)width;
+}
+
+static void DrawOverlay(){
+    glMatrixMode(GL_PROJECTION);
+    glPushMatrix();
+    glLoadIdentity();
+    gluOrtho2D(0,WindowWidth,0,WindowHeight);
+    glMatrixMode(GL_MODELVIEW);
+    glPushMatrix();
+    glLoadIdentity();
+
+    GLboolean lighting = glIsEnabled(GL_LIGHTING);
+    GLboolean depth = glIsEnabled(GL_DEPTH_TEST);
+    GLboolean texture = glIsEnabled(GL_TEXTURE_2D);
+    glDisable(GL_LIGHTING);
+    glDisable(GL_TEXTURE_2D);
+    glDisable(GL_DEPTH_TEST);
+    glColor3f(1.f,1.f,1.f);
+
+    int activeIdx = CurrentMutableIndex();
+    activeIdx = (activeIdx<0)?0:activeIdx;
+    if(activeIdx>=NUMOBJECTS) activeIdx = NUMOBJECTS-1;
+    const ObjectInfo& active = Objects[activeIdx];
+    const char* geomName = GeomTypeName(active.gtype);
+    const char* colorName = kLightColorNames[(LightColorIdx%NUM_LIGHT_COLORS+NUM_LIGHT_COLORS)%NUM_LIGHT_COLORS];
+    float zoomVal = (LookSlot<0) ? CamDist :
+        ((LookSlot>=0 && LookSlot<NUMOBJECTS)? Objects[LookSlot].camLocal[2] : CamDist);
+    char buf[64];
+    float labelCol[3] = {0.85f,0.85f,0.85f};
+    float objCol[3]   = {1.0f,0.9f,0.4f};
+    float shapeCol[3] = {0.6f,0.9f,1.0f};
+    float matCol[3]   = {0.9f,0.6f,0.5f};
+    float colorCol[3] = {1.0f,0.7f,0.8f};
+    float zoomCol[3]  = {0.7f,1.0f,0.7f};
+    float onCol[3]    = {0.5f,1.0f,0.5f};
+    float offCol[3]   = {1.0f,0.4f,0.4f};
+
+    float y = WindowHeight - 15.f;
+    float cursor = 10.f;
+    cursor = DrawSegment(cursor,y,"Object (1-0): ",labelCol[0],labelCol[1],labelCol[2]);
+    cursor = DrawSegment(cursor,y,active.name,objCol[0],objCol[1],objCol[2]);
+    cursor = DrawSegment(cursor,y," | Shape (,/.): ",labelCol[0],labelCol[1],labelCol[2]);
+    DrawSegment(cursor,y,geomName,shapeCol[0],shapeCol[1],shapeCol[2]);
+
+    y -= 15.f; cursor = 10.f;
+    cursor = DrawSegment(cursor,y,"Material (l/L): ",labelCol[0],labelCol[1],labelCol[2]);
+    snprintf(buf,sizeof(buf),"%d",MatPaletteIdx);
+    cursor = DrawSegment(cursor,y,buf,matCol[0],matCol[1],matCol[2]);
+    cursor = DrawSegment(cursor,y," | Light Color (c/C): ",labelCol[0],labelCol[1],labelCol[2]);
+    cursor = DrawSegment(cursor,y,colorName,colorCol[0],colorCol[1],colorCol[2]);
+    cursor = DrawSegment(cursor,y," | View Zoom (+/-): ",labelCol[0],labelCol[1],labelCol[2]);
+    snprintf(buf,sizeof(buf),"%.2f",zoomVal);
+    DrawSegment(cursor,y,buf,zoomCol[0],zoomCol[1],zoomCol[2]);
+
+    y -= 15.f; cursor = 10.f;
+    cursor = DrawSegment(cursor,y,"Light Mode (k): ",labelCol[0],labelCol[1],labelCol[2]);
+    cursor = DrawSegment(cursor,y,(LightType==1)?"SPOT":"POINT",shapeCol[0],shapeCol[1],shapeCol[2]);
+    cursor = DrawSegment(cursor,y," | Light Motion ('): ",labelCol[0],labelCol[1],labelCol[2]);
+    cursor = DrawSegment(cursor,y,LightMotionOn?"ON":"OFF",
+        LightMotionOn?onCol[0]:offCol[0],
+        LightMotionOn?onCol[1]:offCol[1],
+        LightMotionOn?onCol[2]:offCol[2]);
+    cursor = DrawSegment(cursor,y," | Object Motion (;): ",labelCol[0],labelCol[1],labelCol[2]);
+    DrawSegment(cursor,y,ObjMotionOn?"ON":"OFF",
+        ObjMotionOn?onCol[0]:offCol[0],
+        ObjMotionOn?onCol[1]:offCol[1],
+        ObjMotionOn?onCol[2]:offCol[2]);
+
+    if(lighting) glEnable(GL_LIGHTING); else glDisable(GL_LIGHTING);
+    if(texture)  glEnable(GL_TEXTURE_2D); else glDisable(GL_TEXTURE_2D);
+    if(depth)    glEnable(GL_DEPTH_TEST); else glDisable(GL_DEPTH_TEST);
+
+    glPopMatrix();
+    glMatrixMode(GL_PROJECTION);
+    glPopMatrix();
+    glMatrixMode(GL_MODELVIEW);
+}
+
+static void DrawLightMarker(const float pos[3], bool drawBeam, const float target[3]){
+    glPushMatrix();
+    glTranslatef(pos[0],pos[1],pos[2]);
+    OsuSphere(0.4f,32,16);
+    if(drawBeam && target){
+        float dir[3] = {target[0]-pos[0], target[1]-pos[1], target[2]-pos[2]};
+        Normalize3(dir);
+        float beamLen = 30.f;
+        float tip[3] = {dir[0]*beamLen, dir[1]*beamLen, dir[2]*beamLen};
+        float helper[3] = {0.f,1.f,0.f};
+        if(fabsf(Dot3(dir,helper))>0.9f){
+            helper[0]=1.f; helper[1]=0.f; helper[2]=0.f;
+        }
+        float side[3]; Cross3(dir,helper,side); Normalize3(side);
+        float up2[3]; Cross3(dir,side,up2); Normalize3(up2);
+        float base = 0.8f;
+        glBegin(GL_LINES);
+            glVertex3f(0.f,0.f,0.f);
+            glVertex3f(tip[0],tip[1],tip[2]);
+            float basePos[3] = {tip[0]-dir[0], tip[1]-dir[1], tip[2]-dir[2]};
+            glVertex3f(basePos[0],basePos[1],basePos[2]);
+            glVertex3f(basePos[0]+side[0]*base, basePos[1]+side[1]*base, basePos[2]+side[2]*base);
+            glVertex3f(basePos[0],basePos[1],basePos[2]);
+            glVertex3f(basePos[0]-side[0]*base, basePos[1]-side[1]*base, basePos[2]-side[2]*base);
+            glVertex3f(basePos[0],basePos[1],basePos[2]);
+            glVertex3f(basePos[0]+up2[0]*base, basePos[1]+up2[1]*base, basePos[2]+up2[2]*base);
+            glVertex3f(basePos[0],basePos[1],basePos[2]);
+            glVertex3f(basePos[0]-up2[0]*base, basePos[1]-up2[1]*base, basePos[2]-up2[2]*base);
+        glEnd();
+    }
+    glPopMatrix();
+}
+
 // ---------------------------------------------------------------------
 int main(int argc,char* argv[]){
     glutInit(&argc,argv);
     glutInitDisplayMode(GLUT_DOUBLE|GLUT_RGBA|GLUT_DEPTH);
     glutInitWindowPosition(100,100);
     glutInitWindowSize(WindowWidth,WindowHeight);
-    MainWindow = glutCreateWindow("CS450/550 P5 - Texture Mapping (10 Objects)");
+    MainWindow = glutCreateWindow("CS450/550 P5 - Texture Mapping (6 Objects)");
     glutSetWindow(MainWindow);
 
     glutReshapeFunc(Resize);
@@ -232,19 +506,7 @@ void InitGraphics(){
 void InitLists(){
     for(int i=0;i<NUMOBJECTS;i++){
         Objects[i].displayList = glGenLists(1);
-        glNewList(Objects[i].displayList, GL_COMPILE);
-            switch(Objects[i].gtype){
-                case G_SPHERE: OsuSphere(1.f,64,64); break;
-                case G_CUBE:   OsuCube(1.f); break;
-                case G_CYL:    OsuCylinder(0.5f,1.0f,64,32); break;
-                case G_CONE:   OsuCone(1.0f,0.2f,1.0f,64,32); break;
-                case G_TORUS:  OsuTorus(0.25f,1.0f,96,96); break;
-                case G_OBJ:
-                    if(Objects[i].objSourceDL) glCallList(Objects[i].objSourceDL);
-                    else OsuSphere(1.f,48,32);
-                    break;
-            }
-        glEndList();
+        BakeDisplayListForObject(i);
     }
 }
 
@@ -254,17 +516,15 @@ void Reset(){
     LightMotionOn= true;
     LightType    = 0;
     MatPaletteIdx= 0;
-    NowObject    = 0;
-    LookSlot     = -1;
+    LightColorIdx= 0;
+    NowObject    = (NUMOBJECTS>1)?1:0;
 
-    CamDist = 12.f; CamAzim = 45.f; CamElev = 20.f;
-    ViewBiasYaw = 0.f; ViewBiasPitch = 0.f;
+    ResetOrbitCamera();
 }
 
 void Animate(){
     int ms = glutGet(GLUT_ELAPSED_TIME);
-    ms %= MS_PER_CYCLE;
-    TimeFrac = (float)ms / (float)MS_PER_CYCLE;
+    GlobalTime = 0.001f * (float)ms;
     glutSetWindow(MainWindow);
     glutPostRedisplay();
 }
@@ -280,12 +540,33 @@ void Display(){
     glLoadIdentity();
     gluPerspective(60.0,(float)WindowWidth/(float)WindowHeight,0.1,200.0);
 
-    // update world positions
+    // update world positions with elliptical orbits
     for(int i=0;i<NUMOBJECTS;i++){
-        float thetaOrbit = ObjMotionOn ? (2.f*M_PI*Objects[i].orbitSpd*TimeFrac) : 0.f;
-        Objects[i].wx = Objects[i].orbitR * cosf(thetaOrbit);
-        Objects[i].wz = Objects[i].orbitR * sinf(thetaOrbit);
-        Objects[i].wy = (i%2)?0.4f:0.f;
+        ObjectInfo& obj = Objects[i];
+        float major = obj.orbitR;
+        float minor = (obj.orbitMinor>0.f)? obj.orbitMinor : major;
+        float angle = obj.orbitPhase;
+        if(ObjMotionOn){
+            angle += obj.orbitSpd * GlobalTime * ORBIT_SPEED_SCALE;
+        }
+        float localX = major * cosf(angle);
+        float localZ = minor * sinf(angle);
+        float localY = 0.f;
+        float asc = DEG2RAD(obj.orbitAscending);
+        float ca = cosf(asc), sa = sinf(asc);
+        float rotX = localX*ca - localZ*sa;
+        float rotZ = localX*sa + localZ*ca;
+        float rotY = localY;
+        float inc = DEG2RAD(obj.orbitIncline);
+        float ci = cosf(inc), si = sinf(inc);
+        float tiltY = rotY*ci - rotZ*si;
+        float tiltZ = rotY*si + rotZ*ci;
+        float cx = obj.orbitCenter[0];
+        float cy = obj.orbitCenter[1];
+        float cz = obj.orbitCenter[2];
+        obj.wx = cx + rotX;
+        obj.wz = cz + tiltZ;
+        obj.wy = cy + tiltY + obj.orbitTilt * sinf(angle*0.5f);
     }
 
     glMatrixMode(GL_MODELVIEW);
@@ -315,23 +596,50 @@ void Display(){
     glEnable(GL_LIGHTING);
     glEnable(GL_LIGHT0);
 
-    float Ltheta = LightMotionOn ? (2.f*M_PI*TimeFrac) : 0.f;
-    float Lx = 15.f*cosf(Ltheta), Ly = 10.f + 2.f*sinf(2.f*Ltheta), Lz = 15.f*sinf(Ltheta);
+    const ObjectInfo& sun = Objects[SUN_INDEX];
+    float lightAngle = LightMotionOn ? (0.95f*GlobalTime) : 0.f;
+    float center[3] = {sun.wx, sun.wy + 6.67f, sun.wz};
+    float nPrimary[3] = {0.f, cosf(DEG2RAD(45.f)), sinf(DEG2RAD(45.f))};
+    float uPrimary[3], vPrimary[3];
+    BuildPlaneBasis(nPrimary,uPrimary,vPrimary);
+    float nSecondary[3] = {1.f,0.f,0.f};
+    float uSecondary[3], vSecondary[3];
+    BuildPlaneBasis(nSecondary,uSecondary,vSecondary);
 
+    float radius0 = 16.f;
+    float radius1 = 20.f;
+    float light0Pos[3] = {
+        center[0] + radius0*(cosf(lightAngle)*uPrimary[0] + sinf(lightAngle)*vPrimary[0]),
+        center[1] + radius0*(cosf(lightAngle)*uPrimary[1] + sinf(lightAngle)*vPrimary[1]),
+        center[2] + radius0*(cosf(lightAngle)*uPrimary[2] + sinf(lightAngle)*vPrimary[2])
+    };
+    float angle2 = -(LightMotionOn ? (0.75f*GlobalTime) : 0.f);
+    float light1Pos[3] = {
+        center[0] + radius1*(cosf(angle2)*uSecondary[0] + sinf(angle2)*vSecondary[0]),
+        center[1] + radius1*(cosf(angle2)*uSecondary[1] + sinf(angle2)*vSecondary[1]),
+        center[2] + radius1*(cosf(angle2)*uSecondary[2] + sinf(angle2)*vSecondary[2])
+    };
+
+    const LightColorPreset& lcol = gLightColors[(LightColorIdx%NUM_LIGHT_COLORS+NUM_LIGHT_COLORS)%NUM_LIGHT_COLORS];
+    float lr = Clamp(lcol.rgb[0]*LIGHT_INTENSITY, 0.f, 1.5f);
+    float lg = Clamp(lcol.rgb[1]*LIGHT_INTENSITY, 0.f, 1.5f);
+    float lb = Clamp(lcol.rgb[2]*LIGHT_INTENSITY, 0.f, 1.5f);
+
+    const ObjectInfo& targetObj = Objects[NowObject];
     if(LightType==0){
-        SetPointLight(GL_LIGHT0, Lx,Ly,Lz, 1.f,1.f,1.f);
+        SetPointLight(GL_LIGHT0, light0Pos[0],light0Pos[1],light0Pos[2], lr,lg,lb);
+        SetPointLight(GL_LIGHT1, light1Pos[0],light1Pos[1],light1Pos[2], lr,lg,lb);
     }else{
-        const ObjectInfo& t = Objects[NowObject];
-        SetSpotLight(GL_LIGHT0, Lx,Ly,Lz, t.wx-Lx,t.wy-Ly,t.wz-Lz, 1.f,1.f,1.f);
+        SetSpotLight(GL_LIGHT0, light0Pos[0],light0Pos[1],light0Pos[2],
+            targetObj.wx-light0Pos[0], targetObj.wy-light0Pos[1], targetObj.wz-light0Pos[2],
+            lr,lg,lb);
+        SetSpotLight(GL_LIGHT1, light1Pos[0],light1Pos[1],light1Pos[2],
+            targetObj.wx-light1Pos[0], targetObj.wy-light1Pos[1], targetObj.wz-light1Pos[2],
+            lr,lg,lb);
     }
 
-    const ObjectInfo& cur = Objects[NowObject];
-    float thetaSpin = ObjMotionOn ? (2.f*M_PI*cur.selfSpd*TimeFrac) : 0.f;
-
-    // textures per the prof's steps: enable→bind→env→draw→disable
     if(UseTexture){
         glEnable(GL_TEXTURE_2D);
-        glBindTexture(GL_TEXTURE_2D, cur.texObject);
         glTexEnvf(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE);
     }else{
         glDisable(GL_TEXTURE_2D);
@@ -339,12 +647,33 @@ void Display(){
 
     ApplyMaterial(MatPaletteIdx);
 
-    glPushMatrix();
-        glTranslatef(cur.wx,cur.wy,cur.wz);
-        glRotatef(RAD2DEG(thetaSpin),0,1,0);
-        glScalef(cur.scale,cur.scale,cur.scale);
-        glCallList(cur.displayList);
-    glPopMatrix();
+    for(int i=0;i<NUMOBJECTS;i++){
+        const ObjectInfo& obj = Objects[i];
+        float thetaSpin = ObjMotionOn ? (obj.selfSpd*GlobalTime*SPIN_SPEED_SCALE + obj.selfPhase) : obj.selfPhase;
+        if(UseTexture){
+            glBindTexture(GL_TEXTURE_2D, obj.texObject);
+        }
+        glMaterialfv(GL_FRONT_AND_BACK, GL_EMISSION, (i==SUN_INDEX && UseTexture)?SUN_EMISSION:NO_EMISSION);
+        glPushMatrix();
+            glTranslatef(obj.wx,obj.wy,obj.wz);
+            glRotatef(RAD2DEG(thetaSpin), obj.spinAxis[0], obj.spinAxis[1], obj.spinAxis[2]);
+            glScalef(obj.scale,obj.scale,obj.scale);
+            glCallList(obj.displayList);
+        glPopMatrix();
+    }
+    glMaterialfv(GL_FRONT_AND_BACK, GL_EMISSION, NO_EMISSION);
+
+    // draw visible markers for both light sources
+    glDisable(GL_TEXTURE_2D);
+    glMaterialfv(GL_FRONT_AND_BACK, GL_EMISSION, LIGHT_EMISSION);
+    float targetPos[3] = {targetObj.wx,targetObj.wy,targetObj.wz};
+    bool drawBeam = (LightType==1);
+    DrawLightMarker(light0Pos, drawBeam, targetPos);
+    DrawLightMarker(light1Pos, drawBeam, targetPos);
+    if(UseTexture){
+        glEnable(GL_TEXTURE_2D);
+    }
+    glMaterialfv(GL_FRONT_AND_BACK, GL_EMISSION, NO_EMISSION);
 
     glDisable(GL_TEXTURE_2D);
     glDisable(GL_LIGHTING);
@@ -354,6 +683,8 @@ void Display(){
         glColor3f(0,1,0); glVertex3f(0,0,0); glVertex3f(0,2,0);
         glColor3f(0,0,1); glVertex3f(0,0,0); glVertex3f(0,0,2);
     glEnd();
+
+    DrawOverlay();
 
     glutSwapBuffers();
     glFlush();
@@ -373,18 +704,30 @@ void Keyboard(unsigned char c,int x,int y){
         case 't': case 'T': UseTexture=!UseTexture; break;
         case 'l': case 'L': MatPaletteIdx = (MatPaletteIdx+1)%NUM_MATS; break;
         case 'k': case 'K': LightType = (LightType+1)%2; break; // Point↔Spot
+        case 'c': case 'C': LightColorIdx = (LightColorIdx+1)%NUM_LIGHT_COLORS; break;
         case ';':           ObjMotionOn=!ObjMotionOn; break;
         case '\'':          LightMotionOn=!LightMotionOn; break;
 
-        // cycle LookAt slots only; do not reuse number keys
-        case '1':
-            if(LookSlot<0) LookSlot=0;
-            else { LookSlot++; if(LookSlot>NUMOBJECTS) LookSlot=-1; }
+        // direct LookAt shortcuts (1-0 focus objects, ~ returns to orbit cam)
+        case '1': case '2': case '3': case '4': case '5':
+        case '6': case '7': case '8': case '9': case '0':
+        {
+            int target = (c=='0') ? 0 : (c - '0');
+            if(target >= NUMOBJECTS) target = NUMOBJECTS-1;
+            LookSlot = target;
+            NowObject = target;
+            break;
+        }
+        case '~':
+        case '`':
+            ResetOrbitCamera();
             break;
 
-        // object rotation (cycle current selection)
-        case ',': NowObject = (NowObject-1+NUMOBJECTS)%NUMOBJECTS; break;
-        case '.': NowObject = (NowObject+1)%NUMOBJECTS; break;
+        // shape tweak for current target / zoom controls
+        case ',': AdjustCurrentShape(-1); break;
+        case '.': AdjustCurrentShape(1); break;
+        case '+': case '=': AdjustViewZoom(-0.8f); break;
+        case '-': case '_': AdjustViewZoom(0.8f); break;
 
         case 'r': case 'R': Reset(); break;
         case 27: case 'q': case 'Q': exit(0); break;
