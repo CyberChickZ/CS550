@@ -1,0 +1,4 @@
+
+ERROR: 0:1: '' :  version '330' is not supported
+ERROR: 0:1: '' : syntax error: #version
+
