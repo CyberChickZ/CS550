@@ -1,10 +1,8 @@
-/* 
-    CS 450/550 -- Fall Quarter 2025
-    Project #6: Shaders, I (Pig-in-the-Python)
+/*
+    CS 450/550 -- Fall 2025
+    Project #6: Shaders, I (pig-in-the-python on snakeH.obj)
     Author:        Haochuan Zhang   <zhanhaoc@oregonstate.edu>
-    Course:        OSU CS 550 — Fall Quarter 2025, Project #6: Shaders, I
-    Due:           November 26, 2025
-    Spec Updated:  November 16, 2025
+    Course:        OSU CS 550 — Fall 2025, Project #6: Shaders
 */
 #include <cstdio>
 #include <cstdlib>
@@ -79,10 +77,11 @@ int   WindowWidth = 1024, WindowHeight = 768;
 
 // time / toggles
 float GlobalTime = 0.f;
-bool  UseTexture = true;     // 't'
-bool  ObjMotionOn = true;    // ';'
-bool  LightMotionOn = true;  // '''
+bool  UseTexture = false;    // 't' (default off for solid color)
+bool  ObjMotionOn = false;   // ';'
+bool  LightMotionOn = false; // '''
 int   LightType = 0;         // 0=Point, 1=Spot  ('k')
+bool  LightBeamOn = false;   // 'b'
 int   MatPaletteIdx = 0;     // 'l'
 int   LightColorIdx = 0;     // 'c'
 int   NowObject = 0;         // 0..9, cycled by ',' '.'
@@ -94,6 +93,17 @@ int   ActiveButton = 0, Xmouse=0, Ymouse=0;
 
 // bias while LookAt-locked
 float ViewBiasYaw = 0.f, ViewBiasPitch = 0.f;
+
+// shader program (P6)
+static GLSLProgram PigProgram;
+static bool PigProgramReady = false;
+// 鼠标/键盘以外的动画参数：鼓包沿 X 周期移动（5s 一圈），高度随正弦起伏，可切换方向/动画
+static float PigTime01 = 0.f;   // [0,1) cyclic time for P6 effects
+static float PigD = 0.f;        // bulge center x
+static float PigH = 0.f;        // bulge height scale
+static bool  PigForward = true; // tail->head when true
+static bool  PigHeightAnim = true; // animate height
+static float PigWidth = 8.f;    // 鼓包宽度，可统一传给 shader
 
 // geometry types
 enum GeomType{ G_SPHERE=0, G_CUBE, G_CYL, G_CONE, G_TORUS, G_OBJ };
@@ -124,16 +134,14 @@ struct ObjectInfo{
 };
 
 static ObjectInfo Objects[] = {
-    { "Sol Duck","sun.bmp",     G_OBJ,    '0',0,0, 0.0f,0.0f, 0.0f,0.0f,{0.f,0.f,0.f},0.0f, 0.0f, 0.0f, 0.72f,0.0f,{0.f,1.f,0.f}, 2.0f,0,0,0,{0.f,1.4f,8.0f},0,"ducky.obj" },
-    { "Mercury", "mercury.bmp", G_SPHERE, '1',0,0, 8.0f,1.35f,7.4f,0.2f,{0.f,0.f,0.f},0.12f, 7.0f, 25.f, 3.5f,0.3f,{0.2f,0.95f,0.24f}, 0.6f,0,0,0,{0.f,0.25f,3.5f},0,nullptr },
-    { "Venus",   "venus.bmp",   G_CUBE,   '2',0,0,11.0f,1.05f,10.1f,0.9f,{0.f,0.f,0.f},0.10f, 3.4f, 40.f, 2.4f,0.5f,{0.f,1.f,0.f}, 0.9f,0,0,0,{0.f,0.35f,3.8f},0,nullptr },
-    { "Earth",   "earth.bmp",   G_CYL,    '3',0,0,14.0f,0.85f,12.9f,1.7f,{0.f,0.f,0.f},0.20f, 1.5f,125.f, 2.2f,0.8f,{0.1f,0.97f,0.25f}, 1.1f,0,0,0,{0.f,0.45f,4.0f},0,nullptr },
-    { "Mars",    "mars.bmp",    G_CONE,   '4',0,0,17.0f,0.75f,15.5f,2.4f,{0.f,0.f,0.f},0.22f, 2.1f, 60.f, 1.9f,1.1f,{0.32f,0.85f,0.42f}, 0.95f,0,0,0,{0.f,0.40f,3.8f},0,nullptr },
-    { "Jupiter", "jupiter.bmp", G_TORUS,  '5',0,0,21.0f,0.55f,19.2f,3.1f,{0.f,0.f,0.f},0.28f, 1.3f, 15.f, 1.3f,1.6f,{0.f,1.f,0.f}, 1.5f,0,0,0,{0.f,0.55f,4.5f},0,nullptr },
-    { "Saturn",  "saturn.bmp",  G_SPHERE, '6',0,0,25.0f,0.45f,22.5f,0.6f,{0.f,0.f,0.f},0.32f, 2.8f, 75.f, 1.1f,2.1f,{0.15f,0.95f,0.28f}, 1.3f,0,0,0,{0.f,0.60f,4.8f},0,nullptr },
-    { "Uranus",  "uranus.bmp",  G_CUBE,   '7',0,0,29.0f,0.35f,26.1f,1.3f,{0.f,0.f,0.f},0.35f, 0.8f,110.f, 0.9f,2.8f,{0.0f,0.25f,1.f}, 1.2f,0,0,0,{0.f,0.65f,5.0f},0,nullptr },
-    { "Neptune", "neptune.bmp", G_CYL,    '8',0,0,33.0f,0.30f,29.5f,2.0f,{0.f,0.f,0.f},0.38f, 1.1f,150.f, 0.8f,3.2f,{0.2f,0.6f,0.77f}, 1.1f,0,0,0,{0.f,0.70f,5.3f},0,nullptr },
-    { "Pluto",   "pluto.bmp",   G_CONE,   '9',0,0,37.0f,0.24f,33.2f,2.7f,{0.f,0.f,0.f},0.40f, 4.5f,210.f, 0.7f,3.8f,{0.3f,0.8f,0.5f}, 0.8f,0,0,0,{0.f,0.75f,5.6f},0,nullptr },
+    // Treat the snake as the primary object (index 0) so defaults leave it at the origin.
+    { "Snake", "earth.bmp", G_OBJ, '0', 0,0,
+      0.0f,0.0f, 0.0f,0.0f,{0.f,0.f,0.f},0.0f,
+      0.0f, 0.0f,
+      0.5f,0.0f,{0.f,1.f,0.f},
+      1.0f, 0,0,0,
+      {0.f,0.5f,20.0f},
+      0, "snakeH.obj" },
 };
 static const int NUMOBJECTS = (int)(sizeof(Objects)/sizeof(Objects[0]));
 static const int SUN_INDEX = 0;
@@ -416,11 +424,26 @@ static void DrawOverlay(){
         LightMotionOn?onCol[0]:offCol[0],
         LightMotionOn?onCol[1]:offCol[1],
         LightMotionOn?onCol[2]:offCol[2]);
-    cursor = DrawSegment(cursor,y," | Object Motion (;): ",labelCol[0],labelCol[1],labelCol[2]);
+    cursor = DrawSegment(cursor,y," | Light Beam (b): ",labelCol[0],labelCol[1],labelCol[2]);
+    cursor = DrawSegment(cursor,y,LightBeamOn?"ON":"OFF",
+        LightBeamOn?onCol[0]:offCol[0],
+        LightBeamOn?onCol[1]:offCol[1],
+        LightBeamOn?onCol[2]:offCol[2]);
+    cursor = DrawSegment(cursor,y," | Object Motion (;/space): ",labelCol[0],labelCol[1],labelCol[2]);
     DrawSegment(cursor,y,ObjMotionOn?"ON":"OFF",
         ObjMotionOn?onCol[0]:offCol[0],
         ObjMotionOn?onCol[1]:offCol[1],
         ObjMotionOn?onCol[2]:offCol[2]);
+
+    y -= 15.f; cursor = 10.f;
+    cursor = DrawSegment(cursor,y,"Pig Dir (p): ",labelCol[0],labelCol[1],labelCol[2]);
+    cursor = DrawSegment(cursor,y,PigForward?"Tail->Head":"Head->Tail",
+        shapeCol[0],shapeCol[1],shapeCol[2]);
+    cursor = DrawSegment(cursor,y," | Pig Height (h): ",labelCol[0],labelCol[1],labelCol[2]);
+    DrawSegment(cursor,y,PigHeightAnim?"Anim":"Static",
+        PigHeightAnim?onCol[0]:offCol[0],
+        PigHeightAnim?onCol[1]:offCol[1],
+        PigHeightAnim?onCol[2]:offCol[2]);
 
     if(lighting) glEnable(GL_LIGHTING); else glDisable(GL_LIGHTING);
     if(texture)  glEnable(GL_TEXTURE_2D); else glDisable(GL_TEXTURE_2D);
@@ -471,7 +494,7 @@ int main(int argc,char* argv[]){
     glutInitDisplayMode(GLUT_DOUBLE|GLUT_RGBA|GLUT_DEPTH);
     glutInitWindowPosition(100,100);
     glutInitWindowSize(WindowWidth,WindowHeight);
-    MainWindow = glutCreateWindow("CS450/550 P5 - Texture Mapping (6 Objects)");
+    MainWindow = glutCreateWindow("CS450/550 P6 - Shaders (Snake)");
     glutSetWindow(MainWindow);
 
     glutReshapeFunc(Resize);
@@ -497,11 +520,19 @@ void InitGraphics(){
 
     PrimeNonObjDefaults();
 
+    PigProgram.Init(); // 初始化扩展查询，确保 Mac 旧 GL 也能创建 shader
+    // 尝试加载 P6 shader（顶点鼓包 + 片段光照），失败则回退固定功能
+    PigProgramReady = PigProgram.Create((char*)"PigInPython.vert", (char*)"PigInPython.frag");
+    PigProgram.SetVerbose(false);
+
     for(int i=0;i<NUMOBJECTS;i++) LoadTextureBMP(Objects[i].bmpFile,&Objects[i].texObject);
     for(int i=0;i<NUMOBJECTS;i++){
         if(Objects[i].gtype==G_OBJ && Objects[i].objFile && Objects[i].objSourceDL==0){
             Objects[i].objSourceDL = LoadObjMtlFiles((char*)Objects[i].objFile);
         }
+    }
+    if(!PigProgramReady){
+        fprintf(stderr,"Failed to create PigInPython shader program.\n");
     }
 }
 
@@ -513,9 +544,9 @@ void InitLists(){
 }
 
 void Reset(){
-    UseTexture   = true;
-    ObjMotionOn  = true;
-    LightMotionOn= true;
+    UseTexture   = false;
+    ObjMotionOn  = false;
+    LightMotionOn= false;
     LightType    = 0;
     MatPaletteIdx= 0;
     LightColorIdx= 0;
@@ -527,6 +558,12 @@ void Reset(){
 void Animate(){
     int ms = glutGet(GLUT_ELAPSED_TIME);
     GlobalTime = 0.001f * (float)ms;
+
+    // P6 Time in [0,1) using a fixed cycle (ms wraps each cycle).
+    const int MS_PER_CYCLE = 5000; // faster bulge travel（5秒一圈）
+    int cyc = ms % MS_PER_CYCLE;
+    PigTime01 = (float)cyc / (float)MS_PER_CYCLE;
+
     glutSetWindow(MainWindow);
     glutPostRedisplay();
 }
@@ -600,7 +637,11 @@ void Display(){
 
     const ObjectInfo& sun = Objects[SUN_INDEX];
     float lightAngle = LightMotionOn ? (0.95f*GlobalTime) : 0.f;
-    float center[3] = {sun.wx, sun.wy + 6.67f, sun.wz};
+    // Add a small deterministic wobble so lights don’t circle a perfectly fixed center.
+    float wobbleX = 1.5f * sinf(0.37f*GlobalTime + 1.1f);
+    float wobbleY = 0.8f * sinf(0.22f*GlobalTime + 0.4f);
+    float wobbleZ = 1.8f * cosf(0.51f*GlobalTime + 0.9f);
+    float center[3] = {sun.wx + wobbleX, sun.wy + 6.67f + wobbleY, sun.wz + wobbleZ};
     float nPrimary[3] = {0.f, cosf(DEG2RAD(45.f)), sinf(DEG2RAD(45.f))};
     float uPrimary[3], vPrimary[3];
     BuildPlaneBasis(nPrimary,uPrimary,vPrimary);
@@ -608,8 +649,8 @@ void Display(){
     float uSecondary[3], vSecondary[3];
     BuildPlaneBasis(nSecondary,uSecondary,vSecondary);
 
-    float radius0 = 16.f;
-    float radius1 = 20.f;
+    float radius0 = 16.f + 1.5f * sinf(0.73f*GlobalTime + 0.2f);
+    float radius1 = 20.f + 1.2f * cosf(0.55f*GlobalTime + 1.3f);
     float light0Pos[3] = {
         center[0] + radius0*(cosf(lightAngle)*uPrimary[0] + sinf(lightAngle)*vPrimary[0]),
         center[1] + radius0*(cosf(lightAngle)*uPrimary[1] + sinf(lightAngle)*vPrimary[1]),
@@ -649,6 +690,29 @@ void Display(){
 
     ApplyMaterial(MatPaletteIdx);
 
+    if(PigProgramReady){
+        PigProgram.Use();
+        // 根据 PigTime01 计算鼓包中心位置与高度，传给 shader
+        if(PigForward){
+            PigD = -13.f + PigTime01 * (9.f + 13.f); // tail -> head
+        }else{
+            PigD =  9.f - PigTime01 * (9.f + 13.f); // head -> tail
+        }
+        // bulge height modulation using sine; keep non-negative
+        const float A = 1.2f;
+        const float F = 1.0f;
+        if(PigHeightAnim){
+            float s = A * sinf(F * (2.f*M_PI * PigTime01));
+            PigH = 1.0f + 0.8f * s; // range approx [0.2, 1.8]
+        }else{
+            PigH = 1.0f; // static mid height
+        }
+
+        PigProgram.SetUniformVariable((char*)"uPigD", PigD);
+        PigProgram.SetUniformVariable((char*)"uPigH", PigH);
+        PigProgram.SetUniformVariable((char*)"uPigW", PigWidth);
+    }
+
     for(int i=0;i<NUMOBJECTS;i++){
         const ObjectInfo& obj = Objects[i];
         float thetaSpin = ObjMotionOn ? (obj.selfSpd*GlobalTime*SPIN_SPEED_SCALE + obj.selfPhase) : obj.selfPhase;
@@ -663,15 +727,17 @@ void Display(){
             glCallList(obj.displayList);
         glPopMatrix();
     }
+    if(PigProgramReady){
+        PigProgram.UnUse();
+    }
     glMaterialfv(GL_FRONT_AND_BACK, GL_EMISSION, NO_EMISSION);
 
     // draw visible markers for both light sources
     glDisable(GL_TEXTURE_2D);
     glMaterialfv(GL_FRONT_AND_BACK, GL_EMISSION, LIGHT_EMISSION);
     float targetPos[3] = {targetObj.wx,targetObj.wy,targetObj.wz};
-    bool drawBeam = (LightType==1);
-    DrawLightMarker(light0Pos, drawBeam, targetPos);
-    DrawLightMarker(light1Pos, drawBeam, targetPos);
+    DrawLightMarker(light0Pos, LightBeamOn, targetPos);
+    DrawLightMarker(light1Pos, LightBeamOn, targetPos);
     if(UseTexture){
         glEnable(GL_TEXTURE_2D);
     }
@@ -706,23 +772,30 @@ void Keyboard(unsigned char c,int x,int y){
         case 't': case 'T': UseTexture=!UseTexture; break;
         case 'l': case 'L': MatPaletteIdx = (MatPaletteIdx+1)%NUM_MATS; break;
         case 'k': case 'K': LightType = (LightType+1)%2; break; // Point↔Spot
+        case 'b': case 'B': LightBeamOn = !LightBeamOn; break;
         case 'c': case 'C': LightColorIdx = (LightColorIdx+1)%NUM_LIGHT_COLORS; break;
         case ';':           ObjMotionOn=!ObjMotionOn; break;
         case '\'':          LightMotionOn=!LightMotionOn; break;
+        // 鼓包方向/高度动画开关
+        case 'p': case 'P': PigForward = !PigForward; break;
+        case 'h': case 'H': PigHeightAnim = !PigHeightAnim; break;
 
-        // direct LookAt shortcuts (1-0 focus objects, ~ returns to orbit cam)
-        case '1': case '2': case '3': case '4': case '5':
-        case '6': case '7': case '8': case '9': case '0':
-        {
-            int target = (c=='0') ? 0 : (c - '0');
-            if(target >= NUMOBJECTS) target = NUMOBJECTS-1;
-            LookSlot = target;
-            NowObject = target;
+        // view shortcuts: '1' = lock to snake, '0' = free/orbit view
+        case '1':
+            LookSlot = 0;
+            NowObject = 0;
             break;
-        }
+        case '0':
+            NowObject = 0;
+            ResetOrbitCamera();
+            break;
         case '~':
         case '`':
             ResetOrbitCamera();
+            break;
+
+        case ' ':
+            ObjMotionOn = !ObjMotionOn;
             break;
 
         // shape tweak for current target / zoom controls
